@@ -5,6 +5,9 @@ const string USERNAME = "sliardet";
 public function main() returns error? {
     io:println("");
 
+    // Initialiser le service d'enrichissement
+    EnrichmentService enricher = check new ();
+
     // Infos utilisateur
     SimpleUserInfo user = check lastfmClient.getUserInfo(USERNAME);
     io:println(string `👤 Utilisateur: ${user.name}`);
@@ -12,15 +15,29 @@ public function main() returns error? {
     io:println(string `   Inscrit depuis: ${user.registeredDate}`);
 
     // Écoutes récentes
-    ScrobblesResponse recent = check lastfmClient.getRecentTracks(USERNAME, 20, 1);
-    displayRecentTracks(recent);
+    ScrobblesResponse recent = check lastfmClient.getRecentTracks(USERNAME, 10, 1);
 
-    // Top artistes du mois
-    SimpleArtist[] topArtists = check lastfmClient.getTopArtists(USERNAME, "1month", 10);
-    displayTopArtists(topArtists, "1month");
+    // Enrichir les tracks avec MusicBrainz
+    io:println("");
+    io:println("🔍 Enrichissement des métadonnées...");
+    EnrichedTrack[] enrichedTracks = check enricher.enrichTracks(recent.tracks);
+
+    // Afficher les tracks enrichis
+    displayEnrichedTracks(enrichedTracks, recent);
+
+    // Statistiques du cache
+    var stats = enricher.getCacheStats();
+    io:println("");
+    io:println(string `📊 Cache: ${stats.artists} artistes, ${stats.tracks} tracks`);
+
+    // Artistes nécessitant enrichissement IA
+    CachedArtist[] needsAI = enricher.getArtistsNeedingAIEnrichment();
+    if needsAI.length() > 0 {
+        io:println(string `⚠️  ${needsAI.length()} artistes avec score < 0.8 (candidats pour Claude AI)`);
+    }
 }
 
-function displayRecentTracks(ScrobblesResponse data) {
+function displayEnrichedTracks(EnrichedTrack[] tracks, ScrobblesResponse data) {
     io:println("");
     io:println("============================================================");
     io:println(string `Historique d'écoute de ${data.user}`);
@@ -29,14 +46,43 @@ function displayRecentTracks(ScrobblesResponse data) {
     io:println("============================================================");
     io:println("");
 
-    foreach SimpleTrack track in data.tracks {
+    foreach EnrichedTrack track in tracks {
         string timestamp = track.nowPlaying ? "🎵 En cours..." : (track.datetime ?: "");
         string loved = track.loved ? "❤️ " : "";
 
-        io:println(string `${timestamp} | ${loved}${track.artist} - ${track.track}`);
-        io:println(string `             Album: ${track.album}`);
+        // Affichage adapté pour la musique classique
+        string artistDisplay;
+        if track.isClassical && track.composer is string {
+            string comp = <string>track.composer;
+            artistDisplay = string `${comp} (interpr.: ${track.artist})`;
+        } else {
+            artistDisplay = track.artist;
+        }
+
+        io:println(string `${timestamp} | ${loved}${artistDisplay}`);
+        io:println(string `             🎵 ${track.track}`);
+        io:println(string `             💿 ${track.album}`);
+
+        // Afficher les genres si disponibles
+        if track.genres.length() > 0 {
+            io:println(string `             🏷️  ${track.genres.toString()}`);
+        }
+
+        // Afficher le score de qualité
+        string scoreBar = getScoreBar(track.qualityScore);
+        io:println(string `             📊 Score: ${scoreBar} (${track.qualityScore})`);
+
         io:println("------------------------------------------------------------");
     }
+}
+
+function getScoreBar(decimal score) returns string {
+    int filled = <int>(score * 10.0d);
+    string bar = "";
+    foreach int i in 0 ..< 10 {
+        bar += i < filled ? "█" : "░";
+    }
+    return bar;
 }
 
 function displayTopArtists(SimpleArtist[] artists, string period) {
