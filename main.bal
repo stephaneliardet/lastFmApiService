@@ -17,24 +17,37 @@ public function main() returns error? {
     // Écoutes récentes
     ScrobblesResponse recent = check lastfmClient.getRecentTracks(USERNAME, 10, 1);
 
-    // Enrichir les tracks avec MusicBrainz
+    // 1. Enrichir les tracks avec MusicBrainz
     io:println("");
-    io:println("🔍 Enrichissement des métadonnées...");
+    io:println("🔍 Enrichissement via MusicBrainz...");
     EnrichedTrack[] enrichedTracks = check enricher.enrichTracks(recent.tracks);
 
-    // Afficher les tracks enrichis
+    // 2. Enrichir via Claude AI si score < 0.8
+    CachedArtist[] needsAI = enricher.getArtistsNeedingAIEnrichment();
+    if needsAI.length() > 0 {
+        io:println(string `⚠️  ${needsAI.length()} artistes avec score < 0.8`);
+        io:println("🤖 Enrichissement via Claude AI...");
+
+        int|error enrichedCount = enricher.enrichLowScoreArtistsWithAI();
+        if enrichedCount is int && enrichedCount > 0 {
+            io:println(string `✅ ${enrichedCount} artiste(s) enrichi(s) via Claude AI`);
+
+            // 3. Ré-enrichir les tracks avec les données mises à jour du cache
+            io:println("🔄 Mise à jour des tracks avec les nouvelles données...");
+            enrichedTracks = check enricher.enrichTracks(recent.tracks);
+        } else if enrichedCount is error {
+            io:println(string `❌ Erreur Claude AI: ${enrichedCount.message()}`);
+        }
+    }
+
+    // 4. Afficher les résultats finaux
     displayEnrichedTracks(enrichedTracks, recent);
 
     // Statistiques du cache
     var stats = enricher.getCacheStats();
     io:println("");
     io:println(string `📊 Cache: ${stats.artists} artistes, ${stats.tracks} tracks`);
-
-    // Artistes nécessitant enrichissement IA
-    CachedArtist[] needsAI = enricher.getArtistsNeedingAIEnrichment();
-    if needsAI.length() > 0 {
-        io:println(string `⚠️  ${needsAI.length()} artistes avec score < 0.8 (candidats pour Claude AI)`);
-    }
+    io:println(string `   Appels Claude AI restants: ${enricher.getRemainingClaudeCalls()}`);
 }
 
 function displayEnrichedTracks(EnrichedTrack[] tracks, ScrobblesResponse data) {

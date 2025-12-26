@@ -1,3 +1,4 @@
+import ballerina/io;
 import ballerina/log;
 
 # Seuil de qualité pour déclencher l'enrichissement via Claude AI
@@ -19,16 +20,30 @@ public type EnrichedTrack record {|
     decimal qualityScore;
 |};
 
+# Nombre maximum d'appels Claude AI par exécution
+const int MAX_CLAUDE_CALLS_PER_RUN = 5;
+
 # Service d'enrichissement des données musicales
 public class EnrichmentService {
 
     private final MusicBrainzClient mbClient;
     private final CacheDb cache;
+    private ClaudeClient? claudeClient = ();
+    private int claudeCallsThisRun = 0;
 
     public function init() returns error? {
         self.mbClient = check new ();
         self.cache = check new ();
-        log:printInfo("Enrichment service initialized");
+
+        // Initialiser le client Claude si la clé API est configurée
+        ClaudeClient|error claudeInit = new ();
+        if claudeInit is ClaudeClient {
+            self.claudeClient = claudeInit;
+            log:printInfo("Enrichment service initialized with Claude AI support");
+        } else {
+            log:printWarn("Claude AI client not initialized (API key missing?)");
+            log:printInfo("Enrichment service initialized without Claude AI");
+        }
     }
 
     # Enrichit une liste de tracks avec les métadonnées MusicBrainz
@@ -117,17 +132,26 @@ public class EnrichmentService {
         // 1. Vérifier le cache
         CachedArtist? cached = self.cache.getArtist(artistName);
         if cached is CachedArtist {
-            log:printDebug(string `Cache hit: ${artistName}`);
-            return cached;
+            // Si le score est >= 0.8, on garde les données enrichies (évite de rappeler Claude AI)
+            if cached.qualityScore >= QUALITY_THRESHOLD {
+                log:printDebug(string `Cache hit (score >= 0.8): ${artistName}`);
+                return cached;
+            }
+            // Score < 0.8 : on va quand même vérifier MusicBrainz au cas où
+            log:printDebug(string `Cache hit but low score (${cached.qualityScore}): ${artistName}`);
         }
 
         // 2. Rechercher sur MusicBrainz
-        log:printDebug(string `Cache miss, fetching from MusicBrainz: ${artistName}`);
+        log:printDebug(string `Fetching from MusicBrainz: ${artistName}`);
         ArtistInfo|error mbInfo = self.mbClient.searchArtist(artistName);
 
         if mbInfo is error {
             log:printWarn(string `MusicBrainz lookup failed for: ${artistName} - ${mbInfo.message()}`);
-            // Créer une entrée avec score bas pour réessayer plus tard
+            // Si on a déjà des données en cache, les garder
+            if cached is CachedArtist {
+                return cached;
+            }
+            // Sinon créer une entrée avec score bas
             CachedArtist fallback = {
                 name: artistName,
                 mbid: (),
@@ -135,19 +159,28 @@ public class EnrichmentService {
                 composer: (),
                 isComposer: false,
                 qualityScore: 0.0d,
-                lastUpdated: self.cache.getCurrentTimestamp()
+                lastUpdated: self.cache.getCurrentTimestamp(),
+                enrichedByAI: false
             };
             check self.cache.saveArtist(fallback);
             return fallback;
         }
 
-        // 3. Sauvegarder dans le cache
-        CachedArtist cachedArtist = self.cache.createCachedArtist(mbInfo);
-        check self.cache.saveArtist(cachedArtist);
+        // 3. Comparer avec le cache existant
+        CachedArtist newArtist = self.cache.createCachedArtist(mbInfo);
+
+        // Si les données en cache ont un meilleur score, les garder
+        if cached is CachedArtist && cached.qualityScore > newArtist.qualityScore {
+            log:printDebug(string `Keeping cached data (better score): ${artistName}`);
+            return cached;
+        }
+
+        // 4. Sauvegarder les nouvelles données
+        check self.cache.saveArtist(newArtist);
 
         log:printInfo(string `Enriched artist: ${artistName} (genres: ${mbInfo.genres.toString()}, score: ${mbInfo.qualityScore})`);
 
-        return cachedArtist;
+        return newArtist;
     }
 
     # Détermine si c'est de la musique classique
@@ -320,5 +353,97 @@ public class EnrichmentService {
             artists: self.cache.countArtists(),
             tracks: self.cache.countTracks()
         };
+    }
+
+    # Enrichit les artistes avec un score faible via Claude AI
+    #
+    # + return - Nombre d'artistes enrichis
+    public function enrichLowScoreArtistsWithAI() returns int|error {
+        if self.claudeClient is () {
+            log:printWarn("Claude AI client not available, skipping AI enrichment");
+            return 0;
+        }
+
+        ClaudeClient aiClient = <ClaudeClient>self.claudeClient;
+        CachedArtist[] needsEnrichment = self.cache.getArtistsNeedingEnrichment(QUALITY_THRESHOLD, MAX_CLAUDE_CALLS_PER_RUN);
+
+        int enrichedCount = 0;
+
+        foreach CachedArtist artist in needsEnrichment {
+            if self.claudeCallsThisRun >= MAX_CLAUDE_CALLS_PER_RUN {
+                io:println(string `   ⏸️  Limite atteinte (${MAX_CLAUDE_CALLS_PER_RUN} appels max)`);
+                break;
+            }
+
+            io:println(string `   🔄 Enrichissement: "${artist.name}" (score actuel: ${artist.qualityScore})...`);
+
+            ClaudeArtistEnrichment|error enrichment = aiClient.enrichArtist(artist.name, artist.genres);
+            self.claudeCallsThisRun += 1;
+
+            if enrichment is error {
+                io:println(string `   ❌ Échec pour "${artist.name}": ${enrichment.message()}`);
+                continue;
+            }
+
+            // Mettre à jour l'artiste avec les nouvelles informations
+            CachedArtist updatedArtist = {
+                name: artist.name,
+                mbid: artist.mbid,
+                genres: enrichment.genres.length() > 0 ? enrichment.genres : artist.genres,
+                composer: enrichment.composerFullName ?: artist.composer,
+                isComposer: enrichment.isComposer,
+                qualityScore: self.calculateEnrichedScore(enrichment, artist),
+                lastUpdated: self.cache.getCurrentTimestamp(),
+                enrichedByAI: true
+            };
+
+            check self.cache.saveArtist(updatedArtist);
+            enrichedCount += 1;
+
+            // Affichage clair du résultat
+            io:println(string `   ✅ "${artist.name}" enrichi via Claude AI`);
+            io:println(string `      Genres: ${updatedArtist.genres.toString()}`);
+            io:println(string `      Nouveau score: ${updatedArtist.qualityScore}`);
+            if updatedArtist.composer is string {
+                io:println(string `      Compositeur: ${<string>updatedArtist.composer}`);
+            }
+        }
+
+        return enrichedCount;
+    }
+
+    # Calcule le score après enrichissement Claude AI
+    private function calculateEnrichedScore(ClaudeArtistEnrichment enrichment, CachedArtist original) returns decimal {
+        decimal score = 0.0d;
+
+        // Genres (max 0.4)
+        if enrichment.genres.length() > 0 {
+            score += enrichment.genres.length() >= 2 ? 0.4d : 0.2d;
+        }
+
+        // Type de musique identifié (0.2)
+        if enrichment.musicType is string {
+            score += 0.2d;
+        }
+
+        // Compositeur identifié (0.2)
+        if enrichment.isComposer || enrichment.composerFullName is string {
+            score += 0.2d;
+        }
+
+        // Description disponible (0.1)
+        if enrichment.description is string {
+            score += 0.1d;
+        }
+
+        // Bonus pour enrichissement AI réussi (0.1)
+        score += 0.1d;
+
+        return score > 1.0d ? 1.0d : score;
+    }
+
+    # Retourne le nombre d'appels Claude AI restants pour cette exécution
+    public function getRemainingClaudeCalls() returns int {
+        return MAX_CLAUDE_CALLS_PER_RUN - self.claudeCallsThisRun;
     }
 }

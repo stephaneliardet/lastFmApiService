@@ -17,6 +17,7 @@ public type CachedArtist record {|
     boolean isComposer;
     decimal qualityScore;
     string lastUpdated;
+    boolean enrichedByAI;
 |};
 
 # Track enrichi en cache
@@ -120,6 +121,7 @@ public class CacheDb {
     }
 
     # Récupère les artistes avec un score de qualité inférieur au seuil
+    # (exclut les artistes déjà enrichis via Claude AI)
     #
     # + threshold - Seuil de qualité (ex: 0.8)
     # + 'limit - Nombre maximum de résultats
@@ -129,7 +131,8 @@ public class CacheDb {
         int count = 0;
 
         foreach CachedArtist artist in self.cache.artists {
-            if artist.qualityScore < threshold && count < 'limit {
+            // Exclure les artistes déjà enrichis via Claude AI
+            if artist.qualityScore < threshold && !artist.enrichedByAI && count < 'limit {
                 result.push(artist);
                 count += 1;
             }
@@ -177,7 +180,8 @@ public class CacheDb {
             composer: (),
             isComposer: info.isComposer,
             qualityScore: info.qualityScore,
-            lastUpdated: self.getCurrentTimestamp()
+            lastUpdated: self.getCurrentTimestamp(),
+            enrichedByAI: false
         };
     }
 }
