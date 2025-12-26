@@ -1,5 +1,6 @@
 import ballerina/http;
 import ballerina/log;
+import ballerina/time;
 
 # Client pour l'API Last.fm
 public isolated class LastFMClient {
@@ -47,7 +48,12 @@ public isolated class LastFMClient {
         UserInfoResponse parsed = check response.cloneWithType();
         
         int|string regText = parsed.user.registered.\#text;
-        string registeredDate = regText is int ? regText.toString() : regText;
+        int timestamp = regText is int ? regText : check int:fromString(regText);
+
+        // Convertir le timestamp Unix en date lisible (locale du système)
+        time:Utc utcTime = [timestamp, 0];
+        time:Civil civilTime = time:utcToCivil(utcTime);
+        string registeredDate = string `${civilTime.day}/${civilTime.month}/${civilTime.year}`;
 
         return {
             name: parsed.user.name,
