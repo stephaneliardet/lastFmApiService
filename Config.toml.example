@@ -1,0 +1,9 @@
+# Configuration Last.fm History Service
+# Renommer en Config.toml et adapter les valeurs
+
+# Clé API Last.fm (obligatoire)
+# Créer sur: https://www.last.fm/api/account/create
+apiKey = "VOTRE_CLE_API_LASTFM"
+
+# Port du service HTTP
+servicePort = 8080
