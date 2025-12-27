@@ -4,11 +4,22 @@ import ballerina/log;
 import ballerina/time;
 
 # Configuration de la base de données cache
+#
+# + dbPath - Chemin vers le fichier JSON de cache
 public type CacheDbConfig record {|
     string dbPath = "data/cache.json";
 |};
 
 # Artiste en cache
+#
+# + name - Nom de l'artiste
+# + mbid - MusicBrainz ID (optionnel)
+# + genres - Liste des genres musicaux
+# + composer - Nom du compositeur (si applicable)
+# + isComposer - Indique si l'artiste est un compositeur
+# + qualityScore - Score de qualité des données (0.0 à 1.0)
+# + lastUpdated - Date de dernière mise à jour
+# + enrichedByAI - Indique si enrichi via Claude AI
 public type CachedArtist record {|
     string name;
     string? mbid;
@@ -21,6 +32,14 @@ public type CachedArtist record {|
 |};
 
 # Track enrichi en cache
+#
+# + artistName - Nom de l'artiste
+# + trackName - Nom du morceau
+# + albumName - Nom de l'album (optionnel)
+# + genres - Liste des genres musicaux
+# + composer - Nom du compositeur (si applicable)
+# + qualityScore - Score de qualité des données (0.0 à 1.0)
+# + lastUpdated - Date de dernière mise à jour
 public type CachedTrack record {|
     string artistName;
     string trackName;
@@ -32,6 +51,9 @@ public type CachedTrack record {|
 |};
 
 # Structure du cache complet
+#
+# + artists - Map des artistes indexés par nom
+# + tracks - Map des tracks indexés par clé artiste|||track
 type CacheData record {|
     map<CachedArtist> artists;
     map<CachedTrack> tracks;
@@ -51,6 +73,8 @@ public class CacheDb {
     }
 
     # Assure que le répertoire data existe
+    #
+    # + return - Erreur éventuelle
     private function ensureDirectoryExists() returns error? {
         string dir = "data";
         if !check file:test(dir, file:EXISTS) {
@@ -59,6 +83,8 @@ public class CacheDb {
     }
 
     # Charge le cache depuis le fichier
+    #
+    # + return - Données du cache ou erreur
     private function loadCache() returns CacheData|error {
         if check file:test(self.dbPath, file:EXISTS) {
             string content = check io:fileReadString(self.dbPath);
@@ -71,6 +97,8 @@ public class CacheDb {
     }
 
     # Sauvegarde le cache dans le fichier
+    #
+    # + return - Erreur éventuelle
     private function saveCache() returns error? {
         string jsonContent = self.cache.toJsonString();
         check io:fileWriteString(self.dbPath, jsonContent);
@@ -95,6 +123,10 @@ public class CacheDb {
     }
 
     # Génère une clé unique pour un track
+    #
+    # + artistName - Nom de l'artiste
+    # + trackName - Nom du morceau
+    # + return - Clé unique au format "artiste|||track"
     private function trackKey(string artistName, string trackName) returns string {
         return string `${artistName}|||${trackName}`;
     }
@@ -154,16 +186,22 @@ public class CacheDb {
     }
 
     # Compte le nombre d'artistes en cache
+    #
+    # + return - Nombre d'artistes
     public function countArtists() returns int {
         return self.cache.artists.length();
     }
 
     # Compte le nombre de tracks en cache
+    #
+    # + return - Nombre de tracks
     public function countTracks() returns int {
         return self.cache.tracks.length();
     }
 
     # Retourne le timestamp actuel formaté
+    #
+    # + return - Timestamp au format "YYYY-MM-DD HH:MM:SS"
     public function getCurrentTimestamp() returns string {
         time:Utc now = time:utcNow();
         time:Civil civil = time:utcToCivil(now);
@@ -172,6 +210,9 @@ public class CacheDb {
     }
 
     # Crée un CachedArtist à partir d'un ArtistInfo MusicBrainz
+    #
+    # + info - Informations artiste provenant de MusicBrainz
+    # + return - Artiste formaté pour le cache
     public function createCachedArtist(ArtistInfo info) returns CachedArtist {
         return {
             name: info.name,

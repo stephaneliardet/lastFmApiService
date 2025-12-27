@@ -2,24 +2,43 @@ import ballerina/http;
 import ballerina/log;
 
 # Configuration du client MusicBrainz
+#
+# + baseUrl - URL de base de l'API MusicBrainz
+# + userAgent - User-Agent pour les requêtes HTTP
 public type MusicBrainzConfig record {|
     string baseUrl = "https://musicbrainz.org/ws/2";
     string userAgent = "LastFmHistoryApp/0.1 (contact@example.com)";
 |};
 
 # Informations enrichies d'un artiste
+#
+# + mbid - MusicBrainz ID
+# + name - Nom de l'artiste
+# + type - Type d'artiste (Person, Group, Orchestra, etc.)
+# + disambiguation - Texte de désambiguïsation
+# + genres - Liste des genres musicaux
+# + tags - Liste des tags MusicBrainz
+# + isComposer - Indique si l'artiste est un compositeur
+# + qualityScore - Score de qualité des données (0.0 à 1.0)
 public type ArtistInfo record {|
     string mbid;
     string name;
-    string? 'type;           // Person, Group, Orchestra, etc.
+    string? 'type;
     string? disambiguation;
     string[] genres;
     string[] tags;
     boolean isComposer;
-    decimal qualityScore;    // Score de qualité des données (0.0 - 1.0)
+    decimal qualityScore;
 |};
 
 # Informations enrichies d'un recording
+#
+# + mbid - MusicBrainz ID
+# + title - Titre du morceau
+# + composer - Nom du compositeur (si applicable)
+# + performer - Nom de l'interprète
+# + genres - Liste des genres musicaux
+# + qualityScore - Score de qualité des données (0.0 à 1.0)
 public type RecordingInfo record {|
     string mbid;
     string title;
@@ -83,9 +102,12 @@ public isolated class MusicBrainzClient {
         return self.searchArtistDirect(artistName);
     }
 
-    # Recherche directe d'un artiste sur MusicBrainz
-    # Étape 1: Recherche par nom pour obtenir le mbid
-    # Étape 2: Lookup par mbid avec inc=tags+genres pour les métadonnées complètes
+    # Recherche directe d'un artiste sur MusicBrainz.
+    # Étape 1: Recherche par nom pour obtenir le mbid.
+    # Étape 2: Lookup par mbid avec inc=tags+genres pour les métadonnées complètes.
+    #
+    # + artistName - Nom de l'artiste à rechercher
+    # + return - Informations de l'artiste ou erreur
     private function searchArtistDirect(string artistName) returns ArtistInfo|error {
         string encodedName = self.urlEncode(artistName);
         string path = string `/artist/?query=${encodedName}&fmt=json&limit=1`;
@@ -110,9 +132,12 @@ public isolated class MusicBrainzClient {
         return self.getArtistByMbid(mbid);
     }
 
-    # Parse un nom d'artiste composé pour extraire les différentes parties
+    # Parse un nom d'artiste composé pour extraire les différentes parties.
     # Ex: "Holland Baroque Society / Rachel Podger (violin)"
     #     -> ["Rachel Podger", "Holland Baroque Society"]
+    #
+    # + artistName - Nom complet de l'artiste à parser
+    # + return - Liste des parties du nom triées par longueur
     private function parseArtistName(string artistName) returns string[] {
         string[] parts = [];
 
@@ -147,6 +172,9 @@ public isolated class MusicBrainzClient {
     }
 
     # Sépare une chaîne par plusieurs séparateurs
+    #
+    # + input - Chaîne à séparer
+    # + return - Liste des segments
     private function splitByMultipleSeparators(string input) returns string[] {
         // Remplacer tous les séparateurs par un délimiteur unique
         string normalized = input;
@@ -164,6 +192,9 @@ public isolated class MusicBrainzClient {
     }
 
     # Parse la réponse JSON d'un artiste
+    #
+    # + artistJson - Réponse JSON de l'API MusicBrainz
+    # + return - Informations de l'artiste ou erreur
     private function parseArtistResponse(json artistJson) returns ArtistInfo|error {
         map<json> artist = check artistJson.ensureType();
 
@@ -237,6 +268,9 @@ public isolated class MusicBrainzClient {
     }
 
     # Détermine si un tag est un genre musical
+    #
+    # + tag - Tag à vérifier
+    # + return - Vrai si le tag est un genre musical
     private function isGenreTag(string tag) returns boolean {
         string[] genreKeywords = [
             "classical", "romantic", "baroque", "renaissance", "medieval",
@@ -255,13 +289,18 @@ public isolated class MusicBrainzClient {
         return false;
     }
 
-    # Calcule le score de qualité des données d'un artiste
-    #
+    # Calcule le score de qualité des données d'un artiste.
     # Critères:
     # - Genres trouvés: +0.4 (max)
     # - Tags trouvés: +0.2 (max)
     # - isComposer déterminé: +0.2
     # - Disambiguation présent: +0.2
+    #
+    # + genres - Liste des genres trouvés
+    # + tags - Liste des tags trouvés
+    # + isComposer - Indique si l'artiste est un compositeur
+    # + disambiguation - Texte de désambiguïsation
+    # + return - Score de qualité (0.0 à 1.0)
     private function calculateArtistQualityScore(
             string[] genres,
             string[] tags,
@@ -294,6 +333,9 @@ public isolated class MusicBrainzClient {
     }
 
     # Encode une chaîne pour l'URL
+    #
+    # + input - Chaîne à encoder
+    # + return - Chaîne encodée pour URL
     private function urlEncode(string input) returns string {
         // Encodage simplifié - remplacer les espaces et caractères spéciaux
         string result = input;

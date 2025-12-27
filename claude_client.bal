@@ -4,6 +4,11 @@ import ballerina/log;
 # Configuration du client Claude AI
 configurable string claudeApiKey = ?;
 
+# Configuration du client Claude
+#
+# + baseUrl - URL de base de l'API Anthropic
+# + model - Modèle Claude à utiliser
+# + maxTokens - Nombre maximum de tokens en réponse
 public type ClaudeConfig record {|
     string baseUrl = "https://api.anthropic.com/v1";
     string model = "claude-sonnet-4-20250514";
@@ -11,12 +16,19 @@ public type ClaudeConfig record {|
 |};
 
 # Réponse d'enrichissement d'artiste par Claude
+#
+# + genres - Liste des genres musicaux identifiés
+# + isComposer - Indique si l'artiste est principalement un compositeur
+# + composerFullName - Nom complet du compositeur (pour la musique classique)
+# + musicType - Type de musique (classical, jazz, rock, pop, etc.)
+# + era - Période musicale (baroque, romantic, modern, contemporary, etc.)
+# + description - Courte description de l'artiste
 public type ClaudeArtistEnrichment record {|
     string[] genres;
     boolean isComposer;
     string? composerFullName;
-    string? musicType;       // classical, jazz, rock, pop, etc.
-    string? era;             // baroque, romantic, modern, contemporary, etc.
+    string? musicType;
+    string? era;
     string? description;
 |};
 
@@ -80,6 +92,9 @@ Règles:
     }
 
     # Appelle l'API Claude
+    #
+    # + prompt - Texte du prompt à envoyer
+    # + return - Réponse JSON ou erreur
     private function callClaude(string prompt) returns json|error {
         json requestBody = {
             "model": self.model,
@@ -113,6 +128,9 @@ Règles:
     }
 
     # Parse la réponse de Claude pour extraire l'enrichissement
+    #
+    # + response - Réponse JSON brute de l'API Claude
+    # + return - Enrichissement parsé ou erreur
     private function parseEnrichmentResponse(json response) returns ClaudeArtistEnrichment|error {
         // Extraire le contenu texte de la réponse
         json[] content = check response.content.ensureType();

@@ -5,6 +5,18 @@ import ballerina/log;
 const decimal QUALITY_THRESHOLD = 0.8d;
 
 # Track enrichi avec métadonnées complètes
+#
+# + timestamp - Timestamp Unix de l'écoute
+# + datetime - Date et heure formatées
+# + artist - Nom de l'artiste
+# + track - Nom du morceau
+# + album - Nom de l'album
+# + loved - Indique si le track est aimé par l'utilisateur
+# + nowPlaying - Indique si le track est en cours de lecture
+# + genres - Liste des genres musicaux
+# + composer - Nom du compositeur (si applicable)
+# + isClassical - Indique si c'est de la musique classique
+# + qualityScore - Score de qualité des métadonnées (0.0 à 1.0)
 public type EnrichedTrack record {|
     string timestamp?;
     string datetime?;
@@ -13,7 +25,6 @@ public type EnrichedTrack record {|
     string album;
     boolean loved;
     boolean nowPlaying;
-    // Métadonnées enrichies
     string[] genres;
     string? composer;
     boolean isClassical;
@@ -184,6 +195,9 @@ public class EnrichmentService {
     }
 
     # Détermine si c'est de la musique classique
+    #
+    # + artist - Artiste à analyser
+    # + return - Vrai si musique classique détectée
     private function isClassicalMusic(CachedArtist artist) returns boolean {
         string[] classicalKeywords = ["classical", "baroque", "romantic", "opera", "symphony", "chamber"];
 
@@ -199,11 +213,14 @@ public class EnrichmentService {
         return artist.isComposer;
     }
 
-    # Extrait le compositeur du titre du track ou de l'album
+    # Extrait le compositeur du titre du track ou de l'album.
     # Patterns reconnus:
     # - "Antonio Vivaldi: Violin Concerto No. 2..."
     # - "Beethoven - Symphony No. 5"
     # - "Bach, J.S.: Cello Suite No. 1"
+    #
+    # + title - Titre du morceau ou de l'album
+    # + return - Nom du compositeur ou nil si non trouvé
     private function extractComposerFromTitle(string title) returns string? {
         // Pattern 1: "Compositeur: Œuvre" (le plus courant)
         int? colonIndex = title.indexOf(":");
@@ -227,11 +244,17 @@ public class EnrichmentService {
     }
 
     # Extrait le compositeur du nom de l'album
+    #
+    # + album - Nom de l'album
+    # + return - Nom du compositeur ou nil si non trouvé
     private function extractComposerFromAlbum(string album) returns string? {
         return self.extractComposerFromTitle(album);
     }
 
     # Vérifie si une chaîne ressemble à un nom de compositeur
+    #
+    # + name - Chaîne à vérifier
+    # + return - Vrai si ressemble à un nom de compositeur
     private function looksLikeComposerName(string name) returns boolean {
         // Trop court ou trop long
         if name.length() < 3 || name.length() > 50 {
@@ -269,9 +292,12 @@ public class EnrichmentService {
         return name.includes(" ") || name.includes(".");
     }
 
-    # Normalise un nom de compositeur
-    # Ex: "J.S. Bach" -> "Johann Sebastian Bach"
+    # Normalise un nom de compositeur.
+    # Ex: "J.S. Bach" -> "Johann Sebastian Bach",
     #     "Beethoven" -> "Ludwig van Beethoven"
+    #
+    # + name - Nom du compositeur à normaliser
+    # + return - Nom complet du compositeur
     private function normalizeComposerName(string name) returns string {
         // Table des noms courts vers noms complets
         map<string> composerFullNames = {
@@ -319,6 +345,10 @@ public class EnrichmentService {
     }
 
     # Détecte si un track est de la musique classique basé sur le titre
+    #
+    # + title - Titre du morceau
+    # + album - Nom de l'album
+    # + return - Vrai si musique classique détectée
     private function detectClassicalFromTitle(string title, string album) returns boolean {
         string combined = (title + " " + album).toLowerAscii();
 
@@ -348,6 +378,8 @@ public class EnrichmentService {
     }
 
     # Retourne les statistiques du cache
+    #
+    # + return - Record contenant le nombre d'artistes et de tracks
     public function getCacheStats() returns record {|int artists; int tracks;|} {
         return {
             artists: self.cache.countArtists(),
@@ -413,6 +445,10 @@ public class EnrichmentService {
     }
 
     # Calcule le score après enrichissement Claude AI
+    #
+    # + enrichment - Données d'enrichissement de Claude
+    # + original - Artiste original avant enrichissement
+    # + return - Score de qualité calculé (0.0 à 1.0)
     private function calculateEnrichedScore(ClaudeArtistEnrichment enrichment, CachedArtist original) returns decimal {
         decimal score = 0.0d;
 
@@ -443,6 +479,8 @@ public class EnrichmentService {
     }
 
     # Retourne le nombre d'appels Claude AI restants pour cette exécution
+    #
+    # + return - Nombre d'appels restants
     public function getRemainingClaudeCalls() returns int {
         return MAX_CLAUDE_CALLS_PER_RUN - self.claudeCallsThisRun;
     }
