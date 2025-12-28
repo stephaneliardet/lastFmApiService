@@ -6,3 +6,13 @@ distribution = "2201.13.1"
 
 [build-options]
 observabilityIncluded = true
+
+[[dependency]]
+org = "ballerinax"
+name = "java.jdbc"
+version = "1.13.0"
+
+[[platform.java17.dependency]]
+groupId = "org.xerial"
+artifactId = "sqlite-jdbc"
+version = "3.45.1.0"
