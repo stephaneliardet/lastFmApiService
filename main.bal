@@ -17,10 +17,10 @@ public function main() returns error? {
     // Écoutes récentes
     ScrobblesResponse recent = check lastfmClient.getRecentTracks(USERNAME, 10, 1);
 
-    // 1. Enrichir les tracks avec MusicBrainz
+    // 1. Enrichir les tracks avec MusicBrainz et sauvegarder dans SQLite
     io:println("");
     io:println("🔍 Enrichissement via MusicBrainz...");
-    EnrichedTrack[] enrichedTracks = check enricher.enrichTracks(recent.tracks);
+    EnrichedTrack[] enrichedTracks = check enricher.enrichTracks(recent.tracks, USERNAME);
 
     // 2. Enrichir via Claude AI si score < 0.8
     CachedArtist[] needsAI = enricher.getArtistsNeedingAIEnrichment();
@@ -34,7 +34,7 @@ public function main() returns error? {
 
             // 3. Ré-enrichir les tracks avec les données mises à jour du cache
             io:println("🔄 Mise à jour des tracks avec les nouvelles données...");
-            enrichedTracks = check enricher.enrichTracks(recent.tracks);
+            enrichedTracks = check enricher.enrichTracks(recent.tracks, USERNAME);
         } else if enrichedCount is error {
             io:println(string `❌ Erreur Claude AI: ${enrichedCount.message()}`);
         }

@@ -31,8 +31,8 @@ public type EnrichedTrack record {|
     decimal qualityScore;
 |};
 
-# Nombre maximum d'appels Claude AI par exécution
-const int MAX_CLAUDE_CALLS_PER_RUN = 5;
+# Nombre maximum d'appels Claude AI par exécution (défaut)
+const int DEFAULT_MAX_CLAUDE_CALLS = 50;
 
 # Service d'enrichissement des données musicales
 public class EnrichmentService {
@@ -58,18 +58,89 @@ public class EnrichmentService {
     }
 
     # Enrichit une liste de tracks avec les métadonnées MusicBrainz
+    # et les sauvegarde dans SQLite
     #
     # + tracks - Liste des tracks à enrichir
+    # + userName - Nom d'utilisateur Last.fm (pour sauvegarder les scrobbles)
     # + return - Liste des tracks enrichis
-    public function enrichTracks(SimpleTrack[] tracks) returns EnrichedTrack[]|error {
+    public function enrichTracks(SimpleTrack[] tracks, string userName = "") returns EnrichedTrack[]|error {
         EnrichedTrack[] enrichedTracks = [];
 
         foreach SimpleTrack track in tracks {
             EnrichedTrack enriched = check self.enrichTrack(track);
             enrichedTracks.push(enriched);
+
+            // Sauvegarder le scrobble dans SQLite (si userName fourni et pas nowPlaying)
+            if userName.length() > 0 && !track.nowPlaying {
+                check self.saveScrobbleToSqlite(userName, track, enriched);
+            }
+
+            // Sauvegarder le track enrichi dans SQLite
+            check self.saveTrackToSqlite(enriched);
         }
 
         return enrichedTracks;
+    }
+
+    # Sauvegarde un scrobble dans SQLite (évite les doublons)
+    #
+    # + userName - Nom d'utilisateur
+    # + track - Track original
+    # + enriched - Track enrichi
+    # + return - Erreur éventuelle
+    private function saveScrobbleToSqlite(string userName, SimpleTrack track, EnrichedTrack enriched) returns error? {
+        // Convertir le timestamp string en int
+        int? listenedAt = ();
+        if track.timestamp is string {
+            int|error ts = int:fromString(<string>track.timestamp);
+            if ts is int {
+                listenedAt = ts;
+            }
+        }
+
+        // Vérifier si le scrobble existe déjà
+        if listenedAt is int && self.cache.scrobbleExists(userName, track.artist, track.track, listenedAt) {
+            return; // Déjà enregistré
+        }
+
+        // Sauvegarder le scrobble
+        error? saveResult = self.cache.saveScrobble(
+            userName,
+            track.artist,
+            track.track,
+            track.album,
+            listenedAt,
+            track.loved
+        );
+
+        if saveResult is error {
+            log:printDebug(string `Failed to save scrobble: ${saveResult.message()}`);
+        }
+    }
+
+    # Sauvegarde un track enrichi dans SQLite
+    #
+    # + enriched - Track enrichi à sauvegarder
+    # + return - Erreur éventuelle
+    private function saveTrackToSqlite(EnrichedTrack enriched) returns error? {
+        // Vérifier si le track existe déjà dans SQLite
+        CachedTrack? existing = self.cache.getTrack(enriched.artist, enriched.track);
+        if existing is CachedTrack && existing.qualityScore >= enriched.qualityScore {
+            return; // Garder la version existante si meilleure qualité
+        }
+
+        // Créer et sauvegarder le track
+        CachedTrack cachedTrack = {
+            artistName: enriched.artist,
+            trackName: enriched.track,
+            albumName: enriched.album,
+            genres: enriched.genres,
+            composer: enriched.composer,
+            qualityScore: enriched.qualityScore,
+            lastUpdated: self.cache.getCurrentTimestamp()
+        };
+
+        check self.cache.saveTrack(cachedTrack);
     }
 
     # Enrichit un track avec les métadonnées
@@ -389,21 +460,27 @@ public class EnrichmentService {
 
     # Enrichit les artistes avec un score faible via Claude AI
     #
+    # + maxCalls - Nombre maximum d'appels Claude AI (0 = désactivé, défaut: 50)
     # + return - Nombre d'artistes enrichis
-    public function enrichLowScoreArtistsWithAI() returns int|error {
+    public function enrichLowScoreArtistsWithAI(int maxCalls = DEFAULT_MAX_CLAUDE_CALLS) returns int|error {
+        if maxCalls <= 0 {
+            log:printInfo("AI enrichment disabled (aiLimit=0)");
+            return 0;
+        }
+
         if self.claudeClient is () {
             log:printWarn("Claude AI client not available, skipping AI enrichment");
             return 0;
         }
 
         ClaudeClient aiClient = <ClaudeClient>self.claudeClient;
-        CachedArtist[] needsEnrichment = self.cache.getArtistsNeedingEnrichment(QUALITY_THRESHOLD, MAX_CLAUDE_CALLS_PER_RUN);
+        CachedArtist[] needsEnrichment = self.cache.getArtistsNeedingEnrichment(QUALITY_THRESHOLD, maxCalls);
 
         int enrichedCount = 0;
 
         foreach CachedArtist artist in needsEnrichment {
-            if self.claudeCallsThisRun >= MAX_CLAUDE_CALLS_PER_RUN {
-                io:println(string `   ⏸️  Limite atteinte (${MAX_CLAUDE_CALLS_PER_RUN} appels max)`);
+            if self.claudeCallsThisRun >= maxCalls {
+                io:println(string `   ⏸️  Limite atteinte (${maxCalls} appels max)`);
                 break;
             }
 
@@ -480,8 +557,30 @@ public class EnrichmentService {
 
     # Retourne le nombre d'appels Claude AI restants pour cette exécution
     #
+    # + maxCalls - Limite maximum configurée
     # + return - Nombre d'appels restants
-    public function getRemainingClaudeCalls() returns int {
-        return MAX_CLAUDE_CALLS_PER_RUN - self.claudeCallsThisRun;
+    public function getRemainingClaudeCalls(int maxCalls = DEFAULT_MAX_CLAUDE_CALLS) returns int {
+        return maxCalls - self.claudeCallsThisRun;
+    }
+
+    # Retourne l'instance du cache pour un accès direct
+    #
+    # + return - Instance du cache
+    public function getCache() returns CacheDb {
+        return self.cache;
+    }
+
+    # Récupère tous les artistes du cache
+    #
+    # + return - Liste de tous les artistes en cache
+    public function getAllCachedArtists() returns CachedArtist[] {
+        return self.cache.getAllArtists();
+    }
+
+    # Récupère tous les tracks du cache
+    #
+    # + return - Liste de tous les tracks en cache
+    public function getAllCachedTracks() returns CachedTrack[] {
+        return self.cache.getAllTracks();
     }
 }

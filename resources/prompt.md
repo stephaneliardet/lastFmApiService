@@ -23,3 +23,9 @@ l'algorythm utilise le workflow suivant:
 
 
 Dans l'immédiat tu n'essaies pas d'implémtenter d'autres features qui n'auraient pas été explicitement demandées dans ce prompt. Le cas échéant, tu demandes au developpeur s'il souhaite implémenter une feature qui te semble être particulièrement importante et non décrite dans ce prompt.
+
+### compléments:
+ok j'ai besoin maintenant d'une série de EP REST qui soient dispo sur le 8098 et qui permettent de :
+
+1. déclencher une màj des données via un appel à l'API last.fm (identique au main actuel)
+2. d'intéroger le service pour qu'il me remontent les données enrichies sous la forme d'une collection d'objet dans un json.

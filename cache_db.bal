@@ -76,6 +76,7 @@ public class CacheDb {
     private db:DbClient? sqliteClient = ();
     private repository:ArtistRepository? artistRepo = ();
     private repository:TrackRepository? trackRepo = ();
+    private repository:ScrobbleRepository? scrobbleRepo = ();
 
     public function init(CacheDbConfig config = {}) returns error? {
         self.dbPath = config.dbPath;
@@ -105,6 +106,7 @@ public class CacheDb {
         self.sqliteClient = dbClient;
         self.artistRepo = new (dbClient);
         self.trackRepo = new (dbClient);
+        self.scrobbleRepo = new (dbClient);
 
         log:printInfo(string `SQLite persistence enabled: ${sqlitePath}`);
 
@@ -116,6 +118,14 @@ public class CacheDb {
     #
     # + return - Erreur éventuelle
     private function syncJsonToSqlite() returns error? {
+        check self.syncArtistsToSqlite();
+        check self.syncTracksToSqlite();
+    }
+
+    # Synchronise les artistes JSON vers SQLite
+    #
+    # + return - Erreur éventuelle
+    private function syncArtistsToSqlite() returns error? {
         repository:ArtistRepository? repo = self.artistRepo;
         if repo is () {
             return;
@@ -124,14 +134,14 @@ public class CacheDb {
         // Vérifier si SQLite est vide
         int sqliteCount = check repo.count();
         if sqliteCount > 0 {
-            log:printInfo(string `SQLite already contains ${sqliteCount} artists, skipping sync`);
+            log:printInfo(string `SQLite already contains ${sqliteCount} artists, skipping artist sync`);
             return;
         }
 
         // Synchroniser depuis JSON
         int jsonCount = self.cache.artists.length();
         if jsonCount == 0 {
-            log:printInfo("No JSON data to sync to SQLite");
+            log:printInfo("No JSON artist data to sync to SQLite");
             return;
         }
 
@@ -148,6 +158,44 @@ public class CacheDb {
         }
 
         log:printInfo(string `Synced ${synced}/${jsonCount} artists to SQLite`);
+    }
+
+    # Synchronise les tracks JSON vers SQLite
+    #
+    # + return - Erreur éventuelle
+    private function syncTracksToSqlite() returns error? {
+        repository:TrackRepository? repo = self.trackRepo;
+        if repo is () {
+            return;
+        }
+
+        // Vérifier si SQLite contient des tracks
+        int sqliteCount = check repo.count();
+        if sqliteCount > 0 {
+            log:printInfo(string `SQLite already contains ${sqliteCount} tracks, skipping track sync`);
+            return;
+        }
+
+        // Synchroniser depuis JSON
+        int jsonCount = self.cache.tracks.length();
+        if jsonCount == 0 {
+            log:printInfo("No JSON track data to sync to SQLite");
+            return;
+        }
+
+        log:printInfo(string `Syncing ${jsonCount} tracks from JSON to SQLite...`);
+        int synced = 0;
+
+        foreach CachedTrack track in self.cache.tracks {
+            error? saveResult = self.saveTrackToSqlite(track);
+            if saveResult is error {
+                log:printWarn(string `Failed to sync track ${track.artistName} - ${track.trackName}: ${saveResult.message()}`);
+            } else {
+                synced += 1;
+            }
+        }
+
+        log:printInfo(string `Synced ${synced}/${jsonCount} tracks to SQLite`);
     }
 
     # Assure que le répertoire data existe
@@ -532,6 +580,158 @@ public class CacheDb {
             lastUpdated: self.getCurrentTimestamp(),
             enrichedByAI: false
         };
+    }
+
+    // ==================== SCROBBLES (SQLite uniquement) ====================
+
+    # Sauvegarde un scrobble dans SQLite
+    #
+    # + userName - Nom d'utilisateur Last.fm
+    # + artistName - Nom de l'artiste
+    # + trackName - Nom du morceau
+    # + albumName - Nom de l'album (optionnel)
+    # + listenedAt - Timestamp Unix de l'écoute
+    # + loved - Indique si le morceau est aimé
+    # + return - Erreur éventuelle
+    public function saveScrobble(string userName, string artistName, string trackName,
+            string? albumName, int? listenedAt, boolean loved = false) returns error? {
+        repository:ScrobbleRepository? repo = self.scrobbleRepo;
+        if repo is () {
+            return error("SQLite not enabled");
+        }
+
+        db:ScrobbleEntity scrobble = {
+            userName: userName,
+            artistName: artistName,
+            trackName: trackName,
+            albumName: albumName,
+            listenedAt: listenedAt,
+            loved: loved
+        };
+        _ = check repo.save(scrobble);
+    }
+
+    # Sauvegarde plusieurs scrobbles en batch
+    #
+    # + scrobbles - Liste des scrobbles à sauvegarder
+    # + return - Nombre de scrobbles insérés ou erreur
+    public function saveScrobblesBatch(db:ScrobbleEntity[] scrobbles) returns int|error {
+        repository:ScrobbleRepository? repo = self.scrobbleRepo;
+        if repo is () {
+            return error("SQLite not enabled");
+        }
+        return repo.saveBatch(scrobbles);
+    }
+
+    # Vérifie si un scrobble existe déjà
+    #
+    # + userName - Nom d'utilisateur
+    # + artistName - Nom de l'artiste
+    # + trackName - Nom du track
+    # + listenedAt - Timestamp de l'écoute
+    # + return - true si existe, false sinon
+    public function scrobbleExists(string userName, string artistName, string trackName, int listenedAt) returns boolean {
+        repository:ScrobbleRepository? repo = self.scrobbleRepo;
+        if repo is () {
+            return false;
+        }
+        boolean|error result = repo.exists(userName, artistName, trackName, listenedAt);
+        return result is boolean && result;
+    }
+
+    # Récupère les scrobbles d'un utilisateur avec pagination
+    #
+    # + userName - Nom d'utilisateur
+    # + 'limit - Nombre maximum de résultats
+    # + offset - Décalage pour la pagination
+    # + return - Liste des scrobbles ou erreur
+    public function getScrobbles(string userName, int 'limit = 50, int offset = 0) returns db:ScrobbleEntity[]|error {
+        repository:ScrobbleRepository? repo = self.scrobbleRepo;
+        if repo is () {
+            return error("SQLite not enabled");
+        }
+        return repo.findByUser(userName, {'limit: 'limit, offset: offset});
+    }
+
+    # Récupère le dernier scrobble d'un utilisateur
+    #
+    # + userName - Nom d'utilisateur
+    # + return - Dernier scrobble ou nil
+    public function getLastScrobble(string userName) returns db:ScrobbleEntity?|error {
+        repository:ScrobbleRepository? repo = self.scrobbleRepo;
+        if repo is () {
+            return ();
+        }
+        return repo.findLastByUser(userName);
+    }
+
+    # Compte le nombre de scrobbles d'un utilisateur
+    #
+    # + userName - Nom d'utilisateur
+    # + return - Nombre de scrobbles
+    public function countScrobbles(string userName) returns int {
+        repository:ScrobbleRepository? repo = self.scrobbleRepo;
+        if repo is () {
+            return 0;
+        }
+        int|error count = repo.countByUser(userName);
+        return count is int ? count : 0;
+    }
+
+    # Récupère les top artistes d'un utilisateur depuis les scrobbles
+    #
+    # + userName - Nom d'utilisateur
+    # + 'limit - Nombre maximum de résultats
+    # + return - Liste des artistes avec leur nombre d'écoutes
+    public function getTopArtistsFromScrobbles(string userName, int 'limit = 10) returns record {|string artistName; int playCount;|}[]|error {
+        repository:ScrobbleRepository? repo = self.scrobbleRepo;
+        if repo is () {
+            return error("SQLite not enabled");
+        }
+        return repo.getTopArtists(userName, 'limit);
+    }
+
+    # Récupère les top tracks d'un utilisateur depuis les scrobbles
+    #
+    # + userName - Nom d'utilisateur
+    # + 'limit - Nombre maximum de résultats
+    # + return - Liste des tracks avec leur nombre d'écoutes
+    public function getTopTracksFromScrobbles(string userName, int 'limit = 10) returns record {|string artistName; string trackName; int playCount;|}[]|error {
+        repository:ScrobbleRepository? repo = self.scrobbleRepo;
+        if repo is () {
+            return error("SQLite not enabled");
+        }
+        return repo.getTopTracks(userName, 'limit);
+    }
+
+    // ==================== TRACKS (SQLite uniquement pour nouvelles données) ====================
+
+    # Récupère tous les tracks d'un artiste depuis SQLite
+    #
+    # + artistName - Nom de l'artiste
+    # + return - Liste des tracks ou erreur
+    public function getTracksByArtist(string artistName) returns db:TrackEntity[]|error {
+        repository:TrackRepository? repo = self.trackRepo;
+        if repo is () {
+            return error("SQLite not enabled");
+        }
+        return repo.findByArtist(artistName);
+    }
+
+    // ==================== ACCÈS GLOBAL AU CACHE ====================
+
+    # Récupère tous les artistes du cache JSON
+    #
+    # + return - Liste de tous les artistes
+    public function getAllArtists() returns CachedArtist[] {
+        return self.cache.artists.toArray();
+    }
+
+    # Récupère tous les tracks du cache JSON
+    #
+    # + return - Liste de tous les tracks
+    public function getAllTracks() returns CachedTrack[] {
+        return self.cache.tracks.toArray();
     }
 
     # Ferme les connexions
