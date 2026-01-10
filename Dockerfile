@@ -1,21 +1,23 @@
-FROM ballerina/ballerina:2201.10.0 AS build
+FROM ballerina/ballerina:2201.13.1 AS build
 
 WORKDIR /app
-COPY *.bal ./
-COPY Ballerina.toml ./
+COPY --chmod=644 *.bal ./
+COPY --chmod=644 Ballerina.toml ./
+COPY --chmod=755 modules/ ./modules/
 
 RUN bal build
 
 # Runtime image
-FROM eclipse-temurin:17-jre-alpine
+FROM eclipse-temurin:21-jre
 
 WORKDIR /app
 
 COPY --from=build /app/target/bin/lastfm_history.jar ./
 
-# Config via variables d'environnement ou volume
-# Monter Config.toml via: -v /path/to/Config.toml:/app/Config.toml
+# Créer le répertoire data pour SQLite
+RUN mkdir -p /app/data
 
-EXPOSE 8080
+# Ports: 8098 (enriched), 8099 (lastfm brut)
+EXPOSE 8098 8099
 
 ENTRYPOINT ["java", "-jar", "lastfm_history.jar"]
