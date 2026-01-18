@@ -1,0 +1,840 @@
+openapi: 3.0.3
+info:
+  title: Last.fm History API
+  description: |
+    Service REST Ballerina pour accéder à l'historique d'écoute Last.fm.
+
+    Ce service expose deux APIs distinctes :
+    - **API Last.fm (port 8099)** : Données brutes depuis l'API Last.fm
+    - **API Enrichie (port 8098)** : Données enrichies avec métadonnées MusicBrainz et Claude AI, stockées en SQLite
+  version: 0.1.0
+  contact:
+    name: Last.fm History Service
+  license:
+    name: Private
+
+servers:
+  - url: http://localhost:8099
+    description: Service Last.fm (données brutes)
+  - url: http://localhost:8098
+    description: Service Enrichi (données SQLite)
+
+tags:
+  - name: Last.fm
+    description: Endpoints pour accéder aux données brutes Last.fm (port 8099)
+  - name: Enriched
+    description: Endpoints pour les données enrichies avec SQLite (port 8098)
+
+paths:
+  # ==================== SERVICE LAST.FM (Port 8099) ====================
+
+  /api/lastfm/health:
+    get:
+      tags:
+        - Last.fm
+      summary: Health check du service Last.fm
+      description: Vérifie que le service Last.fm est opérationnel
+      operationId: getLastfmHealth
+      responses:
+        '200':
+          description: Service opérationnel
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: "UP"
+                service: "lastfm-history"
+
+  /api/lastfm/users/{username}:
+    get:
+      tags:
+        - Last.fm
+      summary: Informations utilisateur Last.fm
+      description: Récupère les informations de profil d'un utilisateur Last.fm
+      operationId: getUserInfo
+      parameters:
+        - $ref: '#/components/parameters/username'
+      responses:
+        '200':
+          description: Informations utilisateur
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimpleUserInfo'
+        '404':
+          description: Utilisateur non trouvé
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Erreur serveur
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/lastfm/users/{username}/recent:
+    get:
+      tags:
+        - Last.fm
+      summary: Écoutes récentes
+      description: Récupère les écoutes récentes d'un utilisateur depuis Last.fm
+      operationId: getRecentTracks
+      parameters:
+        - $ref: '#/components/parameters/username'
+        - name: limit
+          in: query
+          description: Nombre de tracks à retourner
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: page
+          in: query
+          description: Numéro de page pour la pagination
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+      responses:
+        '200':
+          description: Liste des écoutes récentes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScrobblesResponse'
+        '400':
+          description: Paramètres invalides
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Erreur serveur
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/lastfm/users/{username}/top/artists:
+    get:
+      tags:
+        - Last.fm
+      summary: Top artistes
+      description: Récupère les artistes les plus écoutés par l'utilisateur
+      operationId: getTopArtists
+      parameters:
+        - $ref: '#/components/parameters/username'
+        - $ref: '#/components/parameters/period'
+        - name: limit
+          in: query
+          description: Nombre de résultats
+          schema:
+            type: integer
+            default: 10
+      responses:
+        '200':
+          description: Liste des top artistes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SimpleArtist'
+        '400':
+          description: Période invalide
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Erreur serveur
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/lastfm/users/{username}/top/albums:
+    get:
+      tags:
+        - Last.fm
+      summary: Top albums
+      description: Récupère les albums les plus écoutés par l'utilisateur
+      operationId: getTopAlbums
+      parameters:
+        - $ref: '#/components/parameters/username'
+        - $ref: '#/components/parameters/period'
+        - name: limit
+          in: query
+          description: Nombre de résultats
+          schema:
+            type: integer
+            default: 10
+      responses:
+        '200':
+          description: Liste des top albums
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SimpleAlbum'
+        '400':
+          description: Période invalide
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Erreur serveur
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/lastfm/users/{username}/top/tracks:
+    get:
+      tags:
+        - Last.fm
+      summary: Top tracks
+      description: Récupère les morceaux les plus écoutés par l'utilisateur
+      operationId: getTopTracks
+      parameters:
+        - $ref: '#/components/parameters/username'
+        - $ref: '#/components/parameters/period'
+        - name: limit
+          in: query
+          description: Nombre de résultats
+          schema:
+            type: integer
+            default: 10
+      responses:
+        '200':
+          description: Liste des top tracks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SimpleTopTrack'
+        '400':
+          description: Période invalide
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Erreur serveur
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ==================== SERVICE ENRICHI (Port 8098) ====================
+
+  /api/enriched/health:
+    get:
+      tags:
+        - Enriched
+      summary: Health check du service enrichi
+      description: Vérifie que le service de données enrichies est opérationnel
+      operationId: getEnrichedHealth
+      responses:
+        '200':
+          description: Service opérationnel
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: "UP"
+                service: "lastfm-enriched"
+
+  /api/enriched/users/{username}/sync:
+    post:
+      tags:
+        - Enriched
+      summary: Synchronise les données utilisateur
+      description: |
+        Synchronise les écoutes récentes depuis Last.fm, enrichit les métadonnées
+        via MusicBrainz et optionnellement Claude AI, puis stocke le tout en SQLite.
+      operationId: syncUserData
+      parameters:
+        - $ref: '#/components/parameters/username'
+        - name: limit
+          in: query
+          description: Nombre de tracks à synchroniser
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: aiLimit
+          in: query
+          description: |
+            Nombre maximum d'appels Claude AI pour enrichir les artistes.
+            Mettre à 0 pour désactiver l'enrichissement AI.
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 50
+            default: 50
+      responses:
+        '200':
+          description: Synchronisation réussie
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncResponse'
+        '400':
+          description: Paramètres invalides
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Erreur serveur
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/enriched/users/{username}/scrobbles:
+    get:
+      tags:
+        - Enriched
+      summary: Récupère les scrobbles enrichis
+      description: |
+        Récupère les écoutes d'un utilisateur depuis la base SQLite,
+        enrichies avec les métadonnées (genres, compositeur, etc.)
+      operationId: getEnrichedScrobbles
+      parameters:
+        - $ref: '#/components/parameters/username'
+        - name: limit
+          in: query
+          description: Nombre de résultats
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: offset
+          in: query
+          description: Décalage pour la pagination
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Liste des scrobbles enrichis
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnrichedScrobblesResponse'
+        '400':
+          description: Paramètres invalides
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Erreur serveur
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/enriched/artists:
+    get:
+      tags:
+        - Enriched
+      summary: Liste des artistes enrichis
+      description: Récupère tous les artistes présents dans le cache avec leurs métadonnées
+      operationId: getEnrichedArtists
+      responses:
+        '200':
+          description: Liste des artistes enrichis
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CachedArtist'
+        '500':
+          description: Erreur serveur
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/enriched/tracks:
+    get:
+      tags:
+        - Enriched
+      summary: Liste des tracks enrichis
+      description: Récupère tous les tracks présents dans le cache avec leurs métadonnées
+      operationId: getEnrichedTracks
+      responses:
+        '200':
+          description: Liste des tracks enrichis
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CachedTrack'
+        '500':
+          description: Erreur serveur
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  parameters:
+    username:
+      name: username
+      in: path
+      required: true
+      description: Nom d'utilisateur Last.fm
+      schema:
+        type: string
+      example: sliardet
+
+    period:
+      name: period
+      in: query
+      description: Période d'analyse pour les statistiques
+      schema:
+        type: string
+        enum:
+          - overall
+          - 7day
+          - 1month
+          - 3month
+          - 6month
+          - 12month
+        default: overall
+
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: État du service
+          example: "UP"
+        service:
+          type: string
+          description: Nom du service
+          example: "lastfm-history"
+      required:
+        - status
+        - service
+
+    ErrorResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          description: Message d'erreur
+      required:
+        - message
+
+    SimpleUserInfo:
+      type: object
+      description: Informations utilisateur Last.fm
+      properties:
+        name:
+          type: string
+          description: Nom d'utilisateur
+          example: "sliardet"
+        realname:
+          type: string
+          description: Nom réel de l'utilisateur
+          example: "Stéphane"
+        country:
+          type: string
+          description: Pays de l'utilisateur
+          example: "Switzerland"
+        totalScrobbles:
+          type: integer
+          description: Nombre total d'écoutes
+          example: 12345
+        registeredDate:
+          type: string
+          description: Date d'inscription
+          example: "2020-01-15 10:30"
+        profileUrl:
+          type: string
+          description: URL du profil Last.fm
+          example: "https://www.last.fm/user/sliardet"
+      required:
+        - name
+        - realname
+        - country
+        - totalScrobbles
+        - registeredDate
+        - profileUrl
+
+    SimpleTrack:
+      type: object
+      description: Track écouté (format brut Last.fm)
+      properties:
+        timestamp:
+          type: string
+          description: Timestamp Unix de l'écoute
+          example: "1703952000"
+        datetime:
+          type: string
+          description: Date et heure formatées
+          example: "30 Dec 2024, 14:00"
+        artist:
+          type: string
+          description: Nom de l'artiste
+          example: "Johann Sebastian Bach"
+        track:
+          type: string
+          description: Nom du morceau
+          example: "Goldberg Variations, BWV 988: Aria"
+        album:
+          type: string
+          description: Nom de l'album
+          example: "Goldberg Variations"
+        loved:
+          type: boolean
+          description: Indique si le track est aimé
+          example: true
+        nowPlaying:
+          type: boolean
+          description: Indique si le track est en cours de lecture
+          example: false
+      required:
+        - artist
+        - track
+        - album
+        - loved
+        - nowPlaying
+
+    ScrobblesResponse:
+      type: object
+      description: Réponse paginée des écoutes récentes
+      properties:
+        user:
+          type: string
+          description: Nom d'utilisateur
+          example: "sliardet"
+        page:
+          type: integer
+          description: Page courante
+          example: 1
+        totalPages:
+          type: integer
+          description: Nombre total de pages
+          example: 50
+        totalScrobbles:
+          type: integer
+          description: Nombre total d'écoutes
+          example: 2500
+        tracks:
+          type: array
+          items:
+            $ref: '#/components/schemas/SimpleTrack'
+      required:
+        - user
+        - page
+        - totalPages
+        - totalScrobbles
+        - tracks
+
+    SimpleArtist:
+      type: object
+      description: Artiste dans le classement
+      properties:
+        rank:
+          type: integer
+          description: Position dans le classement
+          example: 1
+        name:
+          type: string
+          description: Nom de l'artiste
+          example: "Johann Sebastian Bach"
+        playcount:
+          type: integer
+          description: Nombre d'écoutes
+          example: 234
+      required:
+        - rank
+        - name
+        - playcount
+
+    SimpleAlbum:
+      type: object
+      description: Album dans le classement
+      properties:
+        rank:
+          type: integer
+          description: Position dans le classement
+          example: 1
+        name:
+          type: string
+          description: Nom de l'album
+          example: "Goldberg Variations"
+        artist:
+          type: string
+          description: Nom de l'artiste
+          example: "Johann Sebastian Bach"
+        playcount:
+          type: integer
+          description: Nombre d'écoutes
+          example: 89
+      required:
+        - rank
+        - name
+        - artist
+        - playcount
+
+    SimpleTopTrack:
+      type: object
+      description: Track dans le classement
+      properties:
+        rank:
+          type: integer
+          description: Position dans le classement
+          example: 1
+        name:
+          type: string
+          description: Nom du morceau
+          example: "Goldberg Variations, BWV 988: Aria"
+        artist:
+          type: string
+          description: Nom de l'artiste
+          example: "Johann Sebastian Bach"
+        playcount:
+          type: integer
+          description: Nombre d'écoutes
+          example: 42
+      required:
+        - rank
+        - name
+        - artist
+        - playcount
+
+    SyncResponse:
+      type: object
+      description: Résultat de la synchronisation
+      properties:
+        success:
+          type: boolean
+          description: Indique si la synchronisation a réussi
+          example: true
+        message:
+          type: string
+          description: Message descriptif
+          example: "Synchronized 20 tracks for user sliardet"
+        tracksProcessed:
+          type: integer
+          description: Nombre de tracks traités
+          example: 20
+        artistsEnrichedByAI:
+          type: integer
+          description: Nombre d'artistes enrichis par Claude AI
+          example: 2
+        cacheStats:
+          type: object
+          description: Statistiques du cache
+          properties:
+            artists:
+              type: integer
+              description: Nombre d'artistes en cache
+              example: 45
+            tracks:
+              type: integer
+              description: Nombre de tracks en cache
+              example: 120
+          required:
+            - artists
+            - tracks
+      required:
+        - success
+        - message
+        - tracksProcessed
+        - artistsEnrichedByAI
+        - cacheStats
+
+    EnrichedScrobble:
+      type: object
+      description: Scrobble enrichi avec métadonnées complètes
+      properties:
+        listenedAt:
+          type: integer
+          nullable: true
+          description: Timestamp Unix de l'écoute
+          example: 1703952000
+        datetime:
+          type: string
+          nullable: true
+          description: Date et heure formatées
+          example: "2024-12-30 14:00:00"
+        artist:
+          type: string
+          description: Nom de l'artiste
+          example: "Johann Sebastian Bach"
+        track:
+          type: string
+          description: Nom du morceau
+          example: "Goldberg Variations, BWV 988: Aria"
+        album:
+          type: string
+          nullable: true
+          description: Nom de l'album
+          example: "Goldberg Variations"
+        loved:
+          type: boolean
+          description: Indique si le track est aimé
+          example: true
+        genres:
+          type: array
+          items:
+            type: string
+          description: Liste des genres musicaux
+          example: ["classical", "baroque"]
+        composer:
+          type: string
+          nullable: true
+          description: Nom du compositeur (si applicable)
+          example: "Johann Sebastian Bach"
+        isClassical:
+          type: boolean
+          description: Indique si c'est de la musique classique
+          example: true
+        qualityScore:
+          type: number
+          format: decimal
+          description: Score de qualité des métadonnées (0.0 à 1.0)
+          example: 0.95
+      required:
+        - artist
+        - track
+        - loved
+        - genres
+        - isClassical
+        - qualityScore
+
+    EnrichedScrobblesResponse:
+      type: object
+      description: Réponse des scrobbles enrichis
+      properties:
+        user:
+          type: string
+          description: Nom d'utilisateur
+          example: "sliardet"
+        totalScrobbles:
+          type: integer
+          description: Nombre total de scrobbles en base
+          example: 150
+        scrobbles:
+          type: array
+          items:
+            $ref: '#/components/schemas/EnrichedScrobble'
+      required:
+        - user
+        - totalScrobbles
+        - scrobbles
+
+    CachedArtist:
+      type: object
+      description: Artiste enrichi en cache
+      properties:
+        name:
+          type: string
+          description: Nom de l'artiste
+          example: "Johann Sebastian Bach"
+        mbid:
+          type: string
+          nullable: true
+          description: MusicBrainz ID
+          example: "24f1766e-9635-4d58-a4d4-9413f9f98a4c"
+        genres:
+          type: array
+          items:
+            type: string
+          description: Liste des genres musicaux
+          example: ["classical", "baroque"]
+        composer:
+          type: string
+          nullable: true
+          description: Nom du compositeur (si applicable)
+          example: "Johann Sebastian Bach"
+        isComposer:
+          type: boolean
+          description: Indique si l'artiste est un compositeur
+          example: true
+        qualityScore:
+          type: number
+          format: decimal
+          description: Score de qualité des données (0.0 à 1.0)
+          example: 0.95
+        lastUpdated:
+          type: string
+          description: Date de dernière mise à jour
+          example: "2024-12-28T15:30:00Z"
+        enrichedByAI:
+          type: boolean
+          description: Indique si enrichi via Claude AI
+          example: true
+      required:
+        - name
+        - genres
+        - isComposer
+        - qualityScore
+        - lastUpdated
+        - enrichedByAI
+
+    CachedTrack:
+      type: object
+      description: Track enrichi en cache
+      properties:
+        artistName:
+          type: string
+          description: Nom de l'artiste
+          example: "Johann Sebastian Bach"
+        trackName:
+          type: string
+          description: Nom du morceau
+          example: "Goldberg Variations, BWV 988: Aria"
+        albumName:
+          type: string
+          nullable: true
+          description: Nom de l'album
+          example: "Goldberg Variations"
+        genres:
+          type: array
+          items:
+            type: string
+          description: Liste des genres musicaux
+          example: ["classical", "baroque"]
+        composer:
+          type: string
+          nullable: true
+          description: Nom du compositeur (si applicable)
+          example: "Johann Sebastian Bach"
+        qualityScore:
+          type: number
+          format: decimal
+          description: Score de qualité des données (0.0 à 1.0)
+          example: 0.95
+        lastUpdated:
+          type: string
+          description: Date de dernière mise à jour
+          example: "2024-12-28T15:30:00Z"
+      required:
+        - artistName
+        - trackName
+        - genres
+        - qualityScore
+        - lastUpdated

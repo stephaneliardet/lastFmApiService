@@ -4,6 +4,7 @@ import ballerina/log;
 import ballerina/time;
 import prive/lastfm_history.db;
 import prive/lastfm_history.repository;
+import prive/lastfm_history.utils;
 
 # Configuration de la base de données cache
 #
@@ -19,22 +20,28 @@ public type CacheDbConfig record {|
 # Artiste en cache
 #
 # + name - Nom de l'artiste
+# + nameNormalized - Nom normalisé pour déduplication (sans accents, minuscules)
 # + mbid - MusicBrainz ID (optionnel)
 # + genres - Liste des genres musicaux
 # + composer - Nom du compositeur (si applicable)
 # + isComposer - Indique si l'artiste est un compositeur
 # + qualityScore - Score de qualité des données (0.0 à 1.0)
+# + enrichmentSource - Source ayant fourni le score (none, lastfm, musicbrainz, claude)
 # + lastUpdated - Date de dernière mise à jour
 # + enrichedByAI - Indique si enrichi via Claude AI
+# + canonicalArtistId - ID de l'artiste canonique si c'est une variante
 public type CachedArtist record {|
     string name;
+    string? nameNormalized = ();
     string? mbid;
     string[] genres;
     string? composer;
     boolean isComposer;
     decimal qualityScore;
+    string enrichmentSource = "none";
     string lastUpdated;
     boolean enrichedByAI;
+    int? canonicalArtistId = ();
 |};
 
 # Track enrichi en cache
@@ -45,6 +52,12 @@ public type CachedArtist record {|
 # + genres - Liste des genres musicaux
 # + composer - Nom du compositeur (si applicable)
 # + qualityScore - Score de qualité des données (0.0 à 1.0)
+# + enrichmentSource - Source ayant fourni le score (none, lastfm, musicbrainz, claude)
+# + period - Période musicale (baroque, classical, romantic, etc.)
+# + musicalForm - Forme musicale (symphony, concerto, sonata, etc.)
+# + opusCatalog - Numéro de catalogue (BWV 1001, K. 466, etc.)
+# + workTitle - Titre normalisé de l'oeuvre complète
+# + movement - Mouvement si applicable
 # + lastUpdated - Date de dernière mise à jour
 public type CachedTrack record {|
     string artistName;
@@ -53,6 +66,12 @@ public type CachedTrack record {|
     string[] genres;
     string? composer;
     decimal qualityScore;
+    string enrichmentSource = "none";
+    string? period = ();
+    string? musicalForm = ();
+    string? opusCatalog = ();
+    string? workTitle = ();
+    string? movement = ();
     string lastUpdated;
 |};
 
@@ -300,14 +319,20 @@ public class CacheDb {
     # + artist - Artiste à convertir
     # + return - Entité pour la DB
     private function cachedArtistToEntity(CachedArtist artist) returns db:ArtistEntity {
+        // Calculer le nom normalisé si non fourni
+        string normalizedName = artist.nameNormalized ?: utils:normalizeString(artist.name);
+
         return {
             name: artist.name,
+            nameNormalized: normalizedName,
             mbid: artist.mbid,
             genres: artist.genres.toJsonString(),
             composer: artist.composer,
             isComposer: artist.isComposer,
             qualityScore: artist.qualityScore,
-            enrichedByAi: artist.enrichedByAI
+            enrichedByAi: artist.enrichedByAI,
+            enrichmentSource: artist.enrichmentSource,
+            canonicalArtistId: artist.canonicalArtistId
         };
     }
 
@@ -325,13 +350,16 @@ public class CacheDb {
 
         return {
             name: entity.name,
+            nameNormalized: entity.nameNormalized,
             mbid: entity.mbid,
             genres: genres,
             composer: entity.composer,
             isComposer: entity.isComposer,
             qualityScore: entity.qualityScore,
+            enrichmentSource: entity.enrichmentSource,
             lastUpdated: entity.updatedAt ?: entity.createdAt ?: self.getCurrentTimestamp(),
-            enrichedByAI: entity.enrichedByAi
+            enrichedByAI: entity.enrichedByAi,
+            canonicalArtistId: entity.canonicalArtistId
         };
     }
 
@@ -424,7 +452,13 @@ public class CacheDb {
             albumName: track.albumName,
             genres: track.genres.toJsonString(),
             composer: track.composer,
-            qualityScore: track.qualityScore
+            qualityScore: track.qualityScore,
+            enrichmentSource: track.enrichmentSource,
+            period: track.period,
+            musicalForm: track.musicalForm,
+            opusCatalog: track.opusCatalog,
+            workTitle: track.workTitle,
+            movement: track.movement
         };
     }
 
@@ -447,6 +481,12 @@ public class CacheDb {
             genres: genres,
             composer: entity.composer,
             qualityScore: entity.qualityScore,
+            enrichmentSource: entity.enrichmentSource,
+            period: entity.period,
+            musicalForm: entity.musicalForm,
+            opusCatalog: entity.opusCatalog,
+            workTitle: entity.workTitle,
+            movement: entity.movement,
             lastUpdated: entity.updatedAt ?: entity.createdAt ?: self.getCurrentTimestamp()
         };
     }
@@ -572,13 +612,16 @@ public class CacheDb {
     public function createCachedArtist(ArtistInfo info) returns CachedArtist {
         return {
             name: info.name,
+            nameNormalized: utils:normalizeString(info.name),
             mbid: info.mbid,
             genres: info.genres,
             composer: (),
             isComposer: info.isComposer,
             qualityScore: info.qualityScore,
+            enrichmentSource: "musicbrainz",
             lastUpdated: self.getCurrentTimestamp(),
-            enrichedByAI: false
+            enrichedByAI: false,
+            canonicalArtistId: ()
         };
     }
 

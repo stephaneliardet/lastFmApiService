@@ -21,8 +21,10 @@ public isolated class ArtistRepository {
     # + return - Artiste trouvé ou nil
     public isolated function findByName(string name) returns db:ArtistEntity?|error {
         sql:ParameterizedQuery query = `
-            SELECT id, name, mbid, genres, composer, is_composer as isComposer,
-                   quality_score as qualityScore, enriched_by_ai as enrichedByAi,
+            SELECT id, name, name_normalized as nameNormalized, mbid, genres, composer,
+                   is_composer as isComposer, quality_score as qualityScore,
+                   enriched_by_ai as enrichedByAi, enrichment_source as enrichmentSource,
+                   canonical_artist_id as canonicalArtistId,
                    created_at as createdAt, updated_at as updatedAt
             FROM artists
             WHERE name = ${name}
@@ -40,8 +42,10 @@ public isolated class ArtistRepository {
     # + return - Artiste trouvé ou nil
     public isolated function findById(int id) returns db:ArtistEntity?|error {
         sql:ParameterizedQuery query = `
-            SELECT id, name, mbid, genres, composer, is_composer as isComposer,
-                   quality_score as qualityScore, enriched_by_ai as enrichedByAi,
+            SELECT id, name, name_normalized as nameNormalized, mbid, genres, composer,
+                   is_composer as isComposer, quality_score as qualityScore,
+                   enriched_by_ai as enrichedByAi, enrichment_source as enrichmentSource,
+                   canonical_artist_id as canonicalArtistId,
                    created_at as createdAt, updated_at as updatedAt
             FROM artists
             WHERE id = ${id}
@@ -66,11 +70,14 @@ public isolated class ArtistRepository {
             sql:ParameterizedQuery query = `
                 UPDATE artists
                 SET mbid = ${artist.mbid},
+                    name_normalized = ${artist.nameNormalized},
                     genres = ${artist.genres},
                     composer = ${artist.composer},
                     is_composer = ${artist.isComposer ? 1 : 0},
                     quality_score = ${artist.qualityScore},
                     enriched_by_ai = ${artist.enrichedByAi ? 1 : 0},
+                    enrichment_source = ${artist.enrichmentSource},
+                    canonical_artist_id = ${artist.canonicalArtistId},
                     updated_at = datetime('now')
                 WHERE name = ${artist.name}
             `;
@@ -79,20 +86,25 @@ public isolated class ArtistRepository {
         } else {
             // Insert
             sql:ParameterizedQuery query = `
-                INSERT INTO artists (name, mbid, genres, composer, is_composer, quality_score, enriched_by_ai)
-                VALUES (${artist.name}, ${artist.mbid}, ${artist.genres}, ${artist.composer},
-                        ${artist.isComposer ? 1 : 0}, ${artist.qualityScore}, ${artist.enrichedByAi ? 1 : 0})
+                INSERT INTO artists (name, name_normalized, mbid, genres, composer, is_composer,
+                                     quality_score, enriched_by_ai, enrichment_source, canonical_artist_id)
+                VALUES (${artist.name}, ${artist.nameNormalized}, ${artist.mbid}, ${artist.genres},
+                        ${artist.composer}, ${artist.isComposer ? 1 : 0}, ${artist.qualityScore},
+                        ${artist.enrichedByAi ? 1 : 0}, ${artist.enrichmentSource}, ${artist.canonicalArtistId})
             `;
             db:ExecutionResult result = check self.dbClient.execute(query);
             return {
                 id: result.lastInsertId,
                 name: artist.name,
+                nameNormalized: artist.nameNormalized,
                 mbid: artist.mbid,
                 genres: artist.genres,
                 composer: artist.composer,
                 isComposer: artist.isComposer,
                 qualityScore: artist.qualityScore,
                 enrichedByAi: artist.enrichedByAi,
+                enrichmentSource: artist.enrichmentSource,
+                canonicalArtistId: artist.canonicalArtistId,
                 createdAt: artist.createdAt,
                 updatedAt: artist.updatedAt
             };
@@ -115,8 +127,10 @@ public isolated class ArtistRepository {
     # + return - Liste des artistes ou erreur
     public isolated function findAll(db:PaginationOptions options = {}) returns db:ArtistEntity[]|error {
         sql:ParameterizedQuery query = `
-            SELECT id, name, mbid, genres, composer, is_composer as isComposer,
-                   quality_score as qualityScore, enriched_by_ai as enrichedByAi,
+            SELECT id, name, name_normalized as nameNormalized, mbid, genres, composer,
+                   is_composer as isComposer, quality_score as qualityScore,
+                   enriched_by_ai as enrichedByAi, enrichment_source as enrichmentSource,
+                   canonical_artist_id as canonicalArtistId,
                    created_at as createdAt, updated_at as updatedAt
             FROM artists
             ORDER BY name ASC
@@ -132,8 +146,10 @@ public isolated class ArtistRepository {
     # + return - Liste des artistes ou erreur
     public isolated function findNeedingEnrichment(decimal threshold, int 'limit = 50) returns db:ArtistEntity[]|error {
         sql:ParameterizedQuery query = `
-            SELECT id, name, mbid, genres, composer, is_composer as isComposer,
-                   quality_score as qualityScore, enriched_by_ai as enrichedByAi,
+            SELECT id, name, name_normalized as nameNormalized, mbid, genres, composer,
+                   is_composer as isComposer, quality_score as qualityScore,
+                   enriched_by_ai as enrichedByAi, enrichment_source as enrichmentSource,
+                   canonical_artist_id as canonicalArtistId,
                    created_at as createdAt, updated_at as updatedAt
             FROM artists
             WHERE quality_score < ${threshold} AND enriched_by_ai = 0
@@ -163,8 +179,10 @@ public isolated class ArtistRepository {
     public isolated function findByGenre(string genre, db:PaginationOptions options = {}) returns db:ArtistEntity[]|error {
         string pattern = string `%"${genre}"%`;
         sql:ParameterizedQuery query = `
-            SELECT id, name, mbid, genres, composer, is_composer as isComposer,
-                   quality_score as qualityScore, enriched_by_ai as enrichedByAi,
+            SELECT id, name, name_normalized as nameNormalized, mbid, genres, composer,
+                   is_composer as isComposer, quality_score as qualityScore,
+                   enriched_by_ai as enrichedByAi, enrichment_source as enrichmentSource,
+                   canonical_artist_id as canonicalArtistId,
                    created_at as createdAt, updated_at as updatedAt
             FROM artists
             WHERE genres LIKE ${pattern}
@@ -172,6 +190,39 @@ public isolated class ArtistRepository {
             LIMIT ${options.'limit} OFFSET ${options.offset}
         `;
         return self.queryArtists(query);
+    }
+
+    # Recherche des artistes par nom normalisé (pour détection doublons)
+    #
+    # + normalizedName - Nom normalisé à rechercher
+    # + return - Liste des artistes correspondants ou erreur
+    public isolated function findByNormalizedName(string normalizedName) returns db:ArtistEntity[]|error {
+        sql:ParameterizedQuery query = `
+            SELECT id, name, name_normalized as nameNormalized, mbid, genres, composer,
+                   is_composer as isComposer, quality_score as qualityScore,
+                   enriched_by_ai as enrichedByAi, enrichment_source as enrichmentSource,
+                   canonical_artist_id as canonicalArtistId,
+                   created_at as createdAt, updated_at as updatedAt
+            FROM artists
+            WHERE name_normalized = ${normalizedName}
+            ORDER BY quality_score DESC
+        `;
+        return self.queryArtists(query);
+    }
+
+    # Recherche l'artiste canonique pour un artiste donné
+    #
+    # + artistId - ID de l'artiste
+    # + return - Artiste canonique ou l'artiste lui-même
+    public isolated function findCanonical(int artistId) returns db:ArtistEntity?|error {
+        db:ArtistEntity? artist = check self.findById(artistId);
+        if artist is db:ArtistEntity {
+            if artist.canonicalArtistId is int {
+                return check self.findById(<int>artist.canonicalArtistId);
+            }
+            return artist;
+        }
+        return ();
     }
 
     # Exécute une requête et mappe les résultats en ArtistEntity
@@ -197,12 +248,15 @@ isolated function mapToArtistEntity(record {} row) returns db:ArtistEntity {
     return {
         id: <int?>row["id"],
         name: <string>row["name"],
+        nameNormalized: <string?>row["nameNormalized"],
         mbid: <string?>row["mbid"],
         genres: <string>row["genres"],
         composer: <string?>row["composer"],
         isComposer: <int>row["isComposer"] == 1,
         qualityScore: <decimal>row["qualityScore"],
         enrichedByAi: <int>row["enrichedByAi"] == 1,
+        enrichmentSource: <string?>row["enrichmentSource"] ?: "none",
+        canonicalArtistId: <int?>row["canonicalArtistId"],
         createdAt: <string?>row["createdAt"],
         updatedAt: <string?>row["updatedAt"]
     };

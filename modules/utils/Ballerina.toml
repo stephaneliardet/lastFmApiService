@@ -1,0 +1,4 @@
+[package]
+org = "lastfm"
+name = "utils"
+version = "0.1.0"

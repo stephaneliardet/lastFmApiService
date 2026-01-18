@@ -24,7 +24,9 @@ public isolated class TrackRepository {
         sql:ParameterizedQuery query = `
             SELECT id, artist_name as artistName, track_name as trackName,
                    album_name as albumName, genres, composer,
-                   quality_score as qualityScore,
+                   quality_score as qualityScore, enrichment_source as enrichmentSource,
+                   period, musical_form as musicalForm, opus_catalog as opusCatalog,
+                   work_title as workTitle, movement,
                    created_at as createdAt, updated_at as updatedAt
             FROM tracks
             WHERE artist_name = ${artistName} AND track_name = ${trackName}
@@ -44,7 +46,9 @@ public isolated class TrackRepository {
         sql:ParameterizedQuery query = `
             SELECT id, artist_name as artistName, track_name as trackName,
                    album_name as albumName, genres, composer,
-                   quality_score as qualityScore,
+                   quality_score as qualityScore, enrichment_source as enrichmentSource,
+                   period, musical_form as musicalForm, opus_catalog as opusCatalog,
+                   work_title as workTitle, movement,
                    created_at as createdAt, updated_at as updatedAt
             FROM tracks
             WHERE id = ${id}
@@ -72,6 +76,12 @@ public isolated class TrackRepository {
                     genres = ${track.genres},
                     composer = ${track.composer},
                     quality_score = ${track.qualityScore},
+                    enrichment_source = ${track.enrichmentSource},
+                    period = ${track.period},
+                    musical_form = ${track.musicalForm},
+                    opus_catalog = ${track.opusCatalog},
+                    work_title = ${track.workTitle},
+                    movement = ${track.movement},
                     updated_at = datetime('now')
                 WHERE artist_name = ${track.artistName} AND track_name = ${track.trackName}
             `;
@@ -80,9 +90,13 @@ public isolated class TrackRepository {
         } else {
             // Insert
             sql:ParameterizedQuery query = `
-                INSERT INTO tracks (artist_name, track_name, album_name, genres, composer, quality_score)
+                INSERT INTO tracks (artist_name, track_name, album_name, genres, composer,
+                                    quality_score, enrichment_source, period, musical_form,
+                                    opus_catalog, work_title, movement)
                 VALUES (${track.artistName}, ${track.trackName}, ${track.albumName},
-                        ${track.genres}, ${track.composer}, ${track.qualityScore})
+                        ${track.genres}, ${track.composer}, ${track.qualityScore},
+                        ${track.enrichmentSource}, ${track.period}, ${track.musicalForm},
+                        ${track.opusCatalog}, ${track.workTitle}, ${track.movement})
             `;
             db:ExecutionResult result = check self.dbClient.execute(query);
             return {
@@ -93,6 +107,12 @@ public isolated class TrackRepository {
                 genres: track.genres,
                 composer: track.composer,
                 qualityScore: track.qualityScore,
+                enrichmentSource: track.enrichmentSource,
+                period: track.period,
+                musicalForm: track.musicalForm,
+                opusCatalog: track.opusCatalog,
+                workTitle: track.workTitle,
+                movement: track.movement,
                 createdAt: track.createdAt,
                 updatedAt: track.updatedAt
             };
@@ -121,7 +141,9 @@ public isolated class TrackRepository {
         sql:ParameterizedQuery query = `
             SELECT id, artist_name as artistName, track_name as trackName,
                    album_name as albumName, genres, composer,
-                   quality_score as qualityScore,
+                   quality_score as qualityScore, enrichment_source as enrichmentSource,
+                   period, musical_form as musicalForm, opus_catalog as opusCatalog,
+                   work_title as workTitle, movement,
                    created_at as createdAt, updated_at as updatedAt
             FROM tracks
             WHERE artist_name = ${artistName}
@@ -139,7 +161,9 @@ public isolated class TrackRepository {
         sql:ParameterizedQuery query = `
             SELECT id, artist_name as artistName, track_name as trackName,
                    album_name as albumName, genres, composer,
-                   quality_score as qualityScore,
+                   quality_score as qualityScore, enrichment_source as enrichmentSource,
+                   period, musical_form as musicalForm, opus_catalog as opusCatalog,
+                   work_title as workTitle, movement,
                    created_at as createdAt, updated_at as updatedAt
             FROM tracks
             ORDER BY artist_name ASC, track_name ASC
@@ -203,6 +227,12 @@ isolated function mapToTrackEntity(record {} row) returns db:TrackEntity {
         genres: <string>row["genres"],
         composer: <string?>row["composer"],
         qualityScore: <decimal>row["qualityScore"],
+        enrichmentSource: <string?>row["enrichmentSource"] ?: "none",
+        period: <string?>row["period"],
+        musicalForm: <string?>row["musicalForm"],
+        opusCatalog: <string?>row["opusCatalog"],
+        workTitle: <string?>row["workTitle"],
+        movement: <string?>row["movement"],
         createdAt: <string?>row["createdAt"],
         updatedAt: <string?>row["updatedAt"]
     };

@@ -4,7 +4,7 @@ import ballerina/log;
 import ballerina/sql;
 
 # Version actuelle du schéma de la base de données
-const int CURRENT_SCHEMA_VERSION = 1;
+const int CURRENT_SCHEMA_VERSION = 2;
 
 # Exécute les migrations nécessaires pour mettre à jour le schéma
 #
@@ -22,6 +22,10 @@ public isolated function runMigrations(DbClient dbClient) returns error? {
     if currentVersion < 1 {
         check migrateToV1(dbClient);
         check updateSchemaVersion(dbClient, 1);
+    }
+    if currentVersion < 2 {
+        check migrateToV2(dbClient);
+        check updateSchemaVersion(dbClient, 2);
     }
 
     log:printInfo(string `Database schema up to date (version ${CURRENT_SCHEMA_VERSION})`);
@@ -162,6 +166,130 @@ isolated function migrateToV1(DbClient dbClient) returns error? {
     _ = check dbClient.execute(indexScrobbleUserDate);
 
     log:printInfo("Migration v1 completed: Created tables artists, tracks, scrobbles");
+}
+
+# Migration vers la version 2 - Enrichissement amélioré
+#
+# + dbClient - Client de base de données
+# + return - Erreur éventuelle
+isolated function migrateToV2(DbClient dbClient) returns error? {
+    log:printInfo("Applying migration v2: Enhanced enrichment schema");
+
+    // === ARTISTS TABLE ===
+
+    // Colonne name_normalized pour déduplication (accents, casse)
+    sql:ParameterizedQuery addArtistNameNormalized = `
+        ALTER TABLE artists ADD COLUMN name_normalized TEXT
+    `;
+    _ = check dbClient.execute(addArtistNameNormalized);
+
+    // Colonne canonical_artist_id pour lier les variantes à l'artiste principal
+    sql:ParameterizedQuery addCanonicalArtistId = `
+        ALTER TABLE artists ADD COLUMN canonical_artist_id INTEGER REFERENCES artists(id)
+    `;
+    _ = check dbClient.execute(addCanonicalArtistId);
+
+    // Colonne enrichment_source pour tracer l'origine du score
+    // Valeurs: 'none', 'lastfm', 'musicbrainz', 'claude'
+    sql:ParameterizedQuery addArtistEnrichmentSource = `
+        ALTER TABLE artists ADD COLUMN enrichment_source TEXT DEFAULT 'none'
+    `;
+    _ = check dbClient.execute(addArtistEnrichmentSource);
+
+    // Index sur name_normalized pour recherche rapide de doublons
+    sql:ParameterizedQuery indexArtistNameNormalized = `
+        CREATE INDEX IF NOT EXISTS idx_artists_name_normalized ON artists(name_normalized)
+    `;
+    _ = check dbClient.execute(indexArtistNameNormalized);
+
+    // Index sur canonical_artist_id pour regroupement
+    sql:ParameterizedQuery indexCanonicalArtist = `
+        CREATE INDEX IF NOT EXISTS idx_artists_canonical ON artists(canonical_artist_id)
+    `;
+    _ = check dbClient.execute(indexCanonicalArtist);
+
+    // === TRACKS TABLE ===
+
+    // Colonnes pour l'enrichissement musique classique
+    sql:ParameterizedQuery addTrackPeriod = `
+        ALTER TABLE tracks ADD COLUMN period TEXT
+    `;
+    _ = check dbClient.execute(addTrackPeriod);
+
+    sql:ParameterizedQuery addTrackMusicalForm = `
+        ALTER TABLE tracks ADD COLUMN musical_form TEXT
+    `;
+    _ = check dbClient.execute(addTrackMusicalForm);
+
+    sql:ParameterizedQuery addTrackOpusCatalog = `
+        ALTER TABLE tracks ADD COLUMN opus_catalog TEXT
+    `;
+    _ = check dbClient.execute(addTrackOpusCatalog);
+
+    sql:ParameterizedQuery addTrackWorkTitle = `
+        ALTER TABLE tracks ADD COLUMN work_title TEXT
+    `;
+    _ = check dbClient.execute(addTrackWorkTitle);
+
+    sql:ParameterizedQuery addTrackMovement = `
+        ALTER TABLE tracks ADD COLUMN movement TEXT
+    `;
+    _ = check dbClient.execute(addTrackMovement);
+
+    // Colonne enrichment_source pour tracer l'origine du score
+    sql:ParameterizedQuery addTrackEnrichmentSource = `
+        ALTER TABLE tracks ADD COLUMN enrichment_source TEXT DEFAULT 'none'
+    `;
+    _ = check dbClient.execute(addTrackEnrichmentSource);
+
+    // === TABLE DE LIAISON TRACK_ARTISTS ===
+
+    // Table pour gérer les artistes multiples par track (feat, collaboration, etc.)
+    sql:ParameterizedQuery createTrackArtists = `
+        CREATE TABLE IF NOT EXISTS track_artists (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+            artist_id INTEGER NOT NULL REFERENCES artists(id) ON DELETE CASCADE,
+            role TEXT DEFAULT 'main',
+            position INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(track_id, artist_id, role)
+        )
+    `;
+    _ = check dbClient.execute(createTrackArtists);
+
+    // Index pour recherche par track
+    sql:ParameterizedQuery indexTrackArtistsTrack = `
+        CREATE INDEX IF NOT EXISTS idx_track_artists_track ON track_artists(track_id)
+    `;
+    _ = check dbClient.execute(indexTrackArtistsTrack);
+
+    // Index pour recherche par artiste
+    sql:ParameterizedQuery indexTrackArtistsArtist = `
+        CREATE INDEX IF NOT EXISTS idx_track_artists_artist ON track_artists(artist_id)
+    `;
+    _ = check dbClient.execute(indexTrackArtistsArtist);
+
+    // Mettre à jour les enrichment_source existants basés sur enriched_by_ai
+    sql:ParameterizedQuery updateExistingArtistSources = `
+        UPDATE artists SET enrichment_source = CASE
+            WHEN enriched_by_ai = 1 THEN 'claude'
+            WHEN quality_score > 0 THEN 'musicbrainz'
+            ELSE 'none'
+        END
+    `;
+    _ = check dbClient.execute(updateExistingArtistSources);
+
+    sql:ParameterizedQuery updateExistingTrackSources = `
+        UPDATE tracks SET enrichment_source = CASE
+            WHEN quality_score >= 0.8 THEN 'musicbrainz'
+            WHEN quality_score > 0 THEN 'lastfm'
+            ELSE 'none'
+        END
+    `;
+    _ = check dbClient.execute(updateExistingTrackSources);
+
+    log:printInfo("Migration v2 completed: Added name_normalized, canonical_artist_id, enrichment_source, classical metadata columns, and track_artists table");
 }
 
 # Vérifie si le schéma de la base de données est à jour

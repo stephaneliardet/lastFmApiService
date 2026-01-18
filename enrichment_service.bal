@@ -1,5 +1,6 @@
 import ballerina/io;
 import ballerina/log;
+import prive/lastfm_history.utils;
 
 # Seuil de qualité pour déclencher l'enrichissement via Claude AI
 const decimal QUALITY_THRESHOLD = 0.8d;
@@ -129,14 +130,29 @@ public class EnrichmentService {
             return; // Garder la version existante si meilleure qualité
         }
 
+        // Valider le composer
+        string? validatedComposer = ();
+        if enriched.composer is string {
+            if utils:isValidComposer(enriched.composer, enriched.album) {
+                validatedComposer = enriched.composer;
+            }
+        }
+
+        // Déterminer la source d'enrichissement
+        string enrichmentSource = "lastfm"; // Source par défaut si on a des données
+        if enriched.qualityScore >= 0.6d {
+            enrichmentSource = "musicbrainz";
+        }
+
         // Créer et sauvegarder le track
         CachedTrack cachedTrack = {
             artistName: enriched.artist,
             trackName: enriched.track,
             albumName: enriched.album,
             genres: enriched.genres,
-            composer: enriched.composer,
+            composer: validatedComposer,
             qualityScore: enriched.qualityScore,
+            enrichmentSource: enrichmentSource,
             lastUpdated: self.cache.getCurrentTimestamp()
         };
 
@@ -236,13 +252,16 @@ public class EnrichmentService {
             // Sinon créer une entrée avec score bas
             CachedArtist fallback = {
                 name: artistName,
+                nameNormalized: utils:normalizeString(artistName),
                 mbid: (),
                 genres: [],
                 composer: (),
                 isComposer: false,
                 qualityScore: 0.0d,
+                enrichmentSource: "none",
                 lastUpdated: self.cache.getCurrentTimestamp(),
-                enrichedByAI: false
+                enrichedByAI: false,
+                canonicalArtistId: ()
             };
             check self.cache.saveArtist(fallback);
             return fallback;
@@ -494,16 +513,67 @@ public class EnrichmentService {
                 continue;
             }
 
+            // Valider le composer retourné par Claude AI
+            string? validatedComposer = ();
+            if enrichment.composerFullName is string {
+                // Vérifier que ce n'est pas un nom d'album ou une valeur invalide
+                if utils:isValidComposer(enrichment.composerFullName) {
+                    validatedComposer = enrichment.composerFullName;
+                } else {
+                    io:println(string `   ⚠️  Compositeur ignoré (invalide): "${<string>enrichment.composerFullName}"`);
+                }
+            }
+            // Si pas de nouveau composer valide, garder l'ancien s'il est valide
+            if validatedComposer is () && artist.composer is string {
+                if utils:isValidComposer(artist.composer) {
+                    validatedComposer = artist.composer;
+                }
+            }
+
+            // Vérifier isComposer avec la nouvelle logique si contexte classique
+            boolean verifiedIsComposer = enrichment.isComposer;
+            string[] updatedGenres = enrichment.genres.length() > 0 ? enrichment.genres : artist.genres;
+
+            // Si Claude dit que c'est un compositeur ET qu'on est dans un contexte classique,
+            // faire une vérification plus stricte
+            if enrichment.isComposer && utils:isClassicalContext(updatedGenres) {
+                // Utiliser la vérification binaire pour confirmer
+                if self.claudeCallsThisRun < maxCalls {
+                    boolean|error composerCheck = self.verifyIsComposerWithAI(artist, maxCalls);
+                    if composerCheck is boolean {
+                        verifiedIsComposer = composerCheck;
+                        if !verifiedIsComposer && enrichment.isComposer {
+                            io:println(string `   🔄 isComposer corrigé: false (était true)`);
+                        }
+                    }
+                }
+            } else if !enrichment.isComposer && utils:isClassicalContext(updatedGenres) {
+                // Si Claude dit que ce n'est pas un compositeur mais qu'on est dans un contexte classique,
+                // vérifier quand même (cas de compositeurs mal détectés comme J.S. Bach)
+                if self.claudeCallsThisRun < maxCalls {
+                    boolean|error composerCheck = self.verifyIsComposerWithAI(artist, maxCalls);
+                    if composerCheck is boolean {
+                        verifiedIsComposer = composerCheck;
+                        if verifiedIsComposer && !enrichment.isComposer {
+                            io:println(string `   🔄 isComposer corrigé: true (était false)`);
+                        }
+                    }
+                }
+            }
+
             // Mettre à jour l'artiste avec les nouvelles informations
             CachedArtist updatedArtist = {
                 name: artist.name,
+                nameNormalized: utils:normalizeString(artist.name),
                 mbid: artist.mbid,
-                genres: enrichment.genres.length() > 0 ? enrichment.genres : artist.genres,
-                composer: enrichment.composerFullName ?: artist.composer,
-                isComposer: enrichment.isComposer,
+                genres: updatedGenres,
+                composer: validatedComposer,
+                isComposer: verifiedIsComposer,
                 qualityScore: self.calculateEnrichedScore(enrichment, artist),
+                enrichmentSource: "claude",
                 lastUpdated: self.cache.getCurrentTimestamp(),
-                enrichedByAI: true
+                enrichedByAI: true,
+                canonicalArtistId: artist.canonicalArtistId
             };
 
             check self.cache.saveArtist(updatedArtist);
@@ -582,5 +652,227 @@ public class EnrichmentService {
     # + return - Liste de tous les tracks en cache
     public function getAllCachedTracks() returns CachedTrack[] {
         return self.cache.getAllTracks();
+    }
+
+    # Enrichit un track classique avec les métadonnées détaillées via Claude AI
+    # Utilise le prompt spécialisé pour identifier compositeur, période, forme, catalogue
+    #
+    # + artistName - Nom de l'artiste/interprète
+    # + trackName - Nom du morceau
+    # + albumName - Nom de l'album (optionnel)
+    # + maxCalls - Limite d'appels AI restants
+    # + return - Track enrichi ou nil si pas de client AI
+    public function enrichClassicalTrackWithAI(string artistName, string trackName, string? albumName = (),
+            int maxCalls = DEFAULT_MAX_CLAUDE_CALLS) returns CachedTrack?|error {
+
+        if self.claudeClient is () {
+            log:printDebug("Claude AI not available for classical track enrichment");
+            return ();
+        }
+
+        if self.claudeCallsThisRun >= maxCalls {
+            log:printDebug("AI call limit reached for classical track enrichment");
+            return ();
+        }
+
+        ClaudeClient aiClient = <ClaudeClient>self.claudeClient;
+
+        io:println(string `   🎼 Enrichissement classique: "${trackName}" par "${artistName}"...`);
+
+        ClaudeClassicalEnrichment|error enrichment = aiClient.enrichClassicalTrack(artistName, trackName, albumName);
+        self.claudeCallsThisRun += 1;
+
+        if enrichment is error {
+            io:println(string `   ❌ Échec enrichissement classique: ${enrichment.message()}`);
+            return ();
+        }
+
+        // Vérifier la confiance
+        if enrichment.confidence is decimal {
+            decimal conf = <decimal>enrichment.confidence;
+            if conf < 0.5d {
+                io:println(string `   ⚠️  Confiance trop basse (${conf}), ignoré`);
+                return ();
+            }
+        }
+
+        // Valider le composer
+        string? validatedComposer = ();
+        if enrichment.composer is string {
+            if utils:isValidComposer(enrichment.composer, albumName) {
+                validatedComposer = enrichment.composer;
+            }
+        }
+
+        // Calculer le score
+        decimal qualityScore = self.calculateClassicalTrackScore(enrichment);
+
+        // Créer le track enrichi
+        CachedTrack cachedTrack = {
+            artistName: artistName,
+            trackName: trackName,
+            albumName: albumName,
+            genres: ["classical"],
+            composer: validatedComposer,
+            qualityScore: qualityScore,
+            enrichmentSource: "claude",
+            period: enrichment.period,
+            musicalForm: enrichment.musicalForm,
+            opusCatalog: enrichment.opusCatalog,
+            workTitle: enrichment.workTitle,
+            movement: enrichment.movement,
+            lastUpdated: self.cache.getCurrentTimestamp()
+        };
+
+        // Sauvegarder
+        check self.cache.saveTrack(cachedTrack);
+
+        // Affichage
+        io:println(string `   ✅ Track classique enrichi`);
+        if validatedComposer is string {
+            io:println(string `      Compositeur: ${validatedComposer}`);
+        }
+        if enrichment.period is string {
+            io:println(string `      Période: ${<string>enrichment.period}`);
+        }
+        if enrichment.opusCatalog is string {
+            io:println(string `      Catalogue: ${<string>enrichment.opusCatalog}`);
+        }
+
+        return cachedTrack;
+    }
+
+    # Vérifie si un artiste est un compositeur historique via Claude AI
+    # Utilise une question binaire claire pour éviter les faux positifs
+    #
+    # + artist - Artiste à vérifier
+    # + maxCalls - Limite d'appels AI restants
+    # + return - true si compositeur historique, false sinon
+    public function verifyIsComposerWithAI(CachedArtist artist, int maxCalls = DEFAULT_MAX_CLAUDE_CALLS) returns boolean|error {
+        if self.claudeClient is () {
+            return artist.isComposer; // Garder la valeur actuelle
+        }
+
+        if self.claudeCallsThisRun >= maxCalls {
+            return artist.isComposer;
+        }
+
+        // Ne vérifier que si c'est un candidat potentiel (genres classiques)
+        if !utils:isClassicalContext(artist.genres) {
+            return false; // Pas dans un contexte classique = pas un compositeur historique
+        }
+
+        ClaudeClient aiClient = <ClaudeClient>self.claudeClient;
+
+        io:println(string `   🔍 Vérification compositeur: "${artist.name}"...`);
+
+        ClaudeComposerCheck|error checkResult = aiClient.checkIsComposer(artist.name, artist.genres);
+        self.claudeCallsThisRun += 1;
+
+        if checkResult is error {
+            io:println(string `   ❌ Échec vérification: ${checkResult.message()}`);
+            return artist.isComposer;
+        }
+
+        if checkResult.isHistoricalComposer {
+            io:println(string `   ✅ "${artist.name}" est un compositeur historique`);
+        } else {
+            io:println(string `   ℹ️  "${artist.name}" est un interprète/ensemble`);
+        }
+        if checkResult.explanation is string {
+            io:println(string `      ${<string>checkResult.explanation}`);
+        }
+
+        return checkResult.isHistoricalComposer;
+    }
+
+    # Calcule le score pour un track classique enrichi
+    #
+    # + enrichment - Données d'enrichissement classique
+    # + return - Score de qualité (0.0 à 1.0)
+    private function calculateClassicalTrackScore(ClaudeClassicalEnrichment enrichment) returns decimal {
+        decimal score = 0.0d;
+
+        // Compositeur identifié (0.3)
+        if enrichment.composer is string {
+            score += 0.3d;
+        }
+
+        // Période identifiée (0.15)
+        if enrichment.period is string {
+            score += 0.15d;
+        }
+
+        // Forme musicale identifiée (0.15)
+        if enrichment.musicalForm is string {
+            score += 0.15d;
+        }
+
+        // Catalogue identifié (0.2)
+        if enrichment.opusCatalog is string {
+            score += 0.2d;
+        }
+
+        // Titre d'oeuvre identifié (0.1)
+        if enrichment.workTitle is string {
+            score += 0.1d;
+        }
+
+        // Mouvement identifié (0.05)
+        if enrichment.movement is string {
+            score += 0.05d;
+        }
+
+        // Bonus confiance (0.05)
+        if enrichment.confidence is decimal && <decimal>enrichment.confidence >= 0.8d {
+            score += 0.05d;
+        }
+
+        return score > 1.0d ? 1.0d : score;
+    }
+
+    # Enrichit les tracks classiques qui n'ont pas encore de compositeur identifié
+    #
+    # + maxCalls - Nombre maximum d'appels Claude AI
+    # + return - Nombre de tracks enrichis
+    public function enrichClassicalTracksWithAI(int maxCalls = DEFAULT_MAX_CLAUDE_CALLS) returns int|error {
+        if maxCalls <= 0 || self.claudeClient is () {
+            return 0;
+        }
+
+        // Récupérer les tracks qui semblent classiques mais sans compositeur
+        CachedTrack[] allTracks = self.cache.getAllTracks();
+        int enrichedCount = 0;
+
+        foreach CachedTrack track in allTracks {
+            if self.claudeCallsThisRun >= maxCalls {
+                io:println(string `   ⏸️  Limite atteinte pour enrichissement classique`);
+                break;
+            }
+
+            // Skip si déjà enrichi par Claude ou si a déjà un compositeur
+            if track.enrichmentSource == "claude" || track.composer is string {
+                continue;
+            }
+
+            // Vérifier si le track semble classique (par genres ou titre)
+            boolean seemsClassical = utils:isClassicalContext(track.genres)
+                || self.detectClassicalFromTitle(track.trackName, track.albumName ?: "");
+
+            if !seemsClassical {
+                continue;
+            }
+
+            // Enrichir
+            CachedTrack?|error enriched = check self.enrichClassicalTrackWithAI(
+                track.artistName, track.trackName, track.albumName, maxCalls
+            );
+
+            if enriched is CachedTrack {
+                enrichedCount += 1;
+            }
+        }
+
+        return enrichedCount;
     }
 }
